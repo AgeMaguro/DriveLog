@@ -1,0 +1,14 @@
+# Store text with LF in the repo; check out with each machine's normal line endings.
+* text=auto
+# Windows batch files must keep CRLF or labels/goto can break.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+# Binary files
+*.ico binary
+*.png binary
+*.jpg binary
+*.pdf binary
+*.exe binary
+*.dll binary
+*.apk binary
+*.keystore binary

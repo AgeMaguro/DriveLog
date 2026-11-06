@@ -1,0 +1,38 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'com.agemaguro.drivelog'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.agemaguro.drivelog'
+        minSdk 29
+        targetSdk 34
+        // vc = GitHub build number; the in-app updater compares it with version.txt in the release.
+        versionCode((project.findProperty('vc') ?: '1').toInteger())
+        versionName "1.0." + (project.findProperty('vc') ?: '1')
+    }
+    signingConfigs {
+        // Shared debug-style key (public password "android") so every build can update the last one.
+        shared {
+            storeFile rootProject.file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.shared
+        }
+    }
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}

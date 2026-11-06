@@ -1,0 +1,72 @@
+# Builds the DriveLog Android app and publishes it as the GitHub release "drivelog-latest"
+# (fixed download link). version.txt in the release is what the in-app updater checks.
+name: DriveLog APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'build.gradle'
+      - 'settings.gradle'
+      - 'gradle.properties'
+      - '.github/workflows/apk.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: drivelog-apk
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 (pinned to exact commit)
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1 (pinned)
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4.4.3 (pinned)
+        with:
+          gradle-version: '8.9'
+      - name: Build APK
+        run: |
+          set -o pipefail
+          gradle --no-daemon assembleRelease -Pvc=${{ github.run_number }} 2>&1 | tee build-output.txt
+          cp app/build/outputs/apk/release/app-release.apk DriveLog.apk
+          echo "${{ github.run_number }}" > version.txt
+      - name: Publish release (old APK moves to past-versions/)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prev=$(gh release view drivelog-latest --json name -q .name 2>/dev/null | sed 's/^DriveLog //' || true)
+          if [ -n "$prev" ]; then
+            mkdir -p past-versions
+            gh release download drivelog-latest -p DriveLog.apk -O "past-versions/DriveLog-$prev.apk" --clobber
+          fi
+          gh release delete drivelog-build-failed --cleanup-tag -y || true
+          gh release delete drivelog-latest --cleanup-tag -y || true
+          gh release create drivelog-latest DriveLog.apk version.txt \
+            --title "DriveLog 1.0.${{ github.run_number }}" \
+            --notes "OBD2 live-data logger, built from ${{ github.sha }}. On your phone: download DriveLog.apk and open it to install. Changes: CHANGELOG.md"
+          if [ -n "$prev" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+            git add past-versions
+            if ! git diff --cached --quiet; then
+              git commit -m "Archive DriveLog $prev in past-versions"
+              git pull --rebase origin main && git push origin HEAD:main
+            fi
+          fi
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tail -c 60000 build-output.txt > build-output-tail.txt 2>/dev/null || echo "no build output" > build-output-tail.txt
+          gh release delete drivelog-build-failed --cleanup-tag -y || true
+          gh release create drivelog-build-failed build-output-tail.txt --prerelease \
+            --title "DriveLog build FAILED (run ${{ github.run_number }})" --notes "See the attached build output."

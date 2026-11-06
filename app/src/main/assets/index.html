@@ -1,0 +1,1257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>DriveLog</title>
+<script>
+/* ---- Debug log (starts first so it can catch startup errors) ---- */
+(function () {
+  const KEY = 'drivelog.log.v1', MAX = 600;
+  let buf = [];
+  try { buf = JSON.parse(localStorage.getItem(KEY) || '[]'); } catch (e) { buf = []; }
+  let saveT = 0;
+  function save() { clearTimeout(saveT); saveT = setTimeout(() => { try { localStorage.setItem(KEY, JSON.stringify(buf.slice(-MAX))); } catch (e) {} }, 400); }
+  function on() { try { return JSON.parse(localStorage.getItem('drivelog.settings.v1') || '{}').debug === true; } catch (e) { return false; } }
+  function add(level, msg) {
+    const d = new Date();
+    const ts = d.toTimeString().slice(0, 8) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+    buf.push(ts + ' ' + level + ' ' + msg);
+    if (buf.length > MAX * 1.2) buf = buf.slice(-MAX);
+    save();
+  }
+  window.Log = {
+    info(m) { if (on()) add('INFO', m); },
+    raw(m) { if (on()) add('OBD ', m); },
+    warn(m) { add('WARN', m); console.warn(m); },
+    err(m) { add('ERR ', m); console.error(m); },
+    all() { return buf.slice(); },
+    clear() { buf = []; save(); }
+  };
+  window.addEventListener('error', e => { Log.err((e.message || 'error') + ' @' + (e.lineno || '?')); window.toast && toast('Something went wrong (see Settings > Debug log)'); });
+  window.addEventListener('unhandledrejection', e => { Log.err('Promise: ' + (e.reason && (e.reason.stack || e.reason.message) || e.reason)); });
+  const h = new URLSearchParams(location.hash.slice(1));
+  if (h.get('crash')) add('ERR ', 'Android crash last run: ' + h.get('crash'));
+})();
+</script>
+<style>
+:root { --bg:#121418; --card:#1b1f27; --card2:#232833; --line:#2e3542; --text:#e8ecf3; --dim:#9aa4b8; --acc:#7fb2ff; --red:#ff6b6b; --green:#7ee0a1; --orange:#ffb86b; }
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin:0; height:100%; background:var(--bg); color:var(--text); font:15px/1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overscroll-behavior:none; }
+body { display:flex; flex-direction:column; }
+button { font:inherit; color:inherit; border:0; border-radius:10px; background:var(--card2); padding:10px 14px; cursor:pointer; }
+button:active { filter:brightness(1.3); }
+button.pri { background:var(--acc); color:#0b1220; font-weight:600; }
+button.danger { background:#4a2228; color:#ffb3b3; }
+button:disabled { opacity:.45; }
+select, input[type=number], input[type=text] { font:inherit; color:var(--text); background:var(--card2); border:1px solid var(--line); border-radius:8px; padding:7px 8px; }
+input[type=number] { width:90px; }
+header { display:flex; align-items:center; gap:10px; padding:10px 12px; padding-top:max(10px, env(safe-area-inset-top)); background:var(--bg); border-bottom:1px solid var(--line); }
+header h1 { font-size:18px; margin:0; flex:1; letter-spacing:.3px; }
+#status { font-size:12px; padding:4px 9px; border-radius:20px; background:var(--card2); color:var(--dim); white-space:nowrap; max-width:52vw; overflow:hidden; text-overflow:ellipsis; }
+#status.ok { background:#1d3a2a; color:var(--green); }
+#status.busy { background:#3a321d; color:var(--orange); }
+#status.bad { background:#3a1d22; color:var(--red); }
+#connBtn { padding:8px 12px; }
+main { flex:1; overflow-y:auto; padding:12px; padding-bottom:20px; }
+nav { display:flex; border-top:1px solid var(--line); background:var(--bg); padding-bottom:env(safe-area-inset-bottom); }
+nav button { flex:1; background:none; border-radius:0; padding:11px 4px 12px; color:var(--dim); font-size:13px; }
+nav button.on { color:var(--acc); box-shadow: inset 0 2px 0 var(--acc); }
+.page { display:none; } .page.on { display:block; }
+.card { background:var(--card); border-radius:14px; padding:12px; margin-bottom:12px; }
+.card h3 { margin:0 0 8px; font-size:14px; color:var(--dim); font-weight:600; text-transform:uppercase; letter-spacing:.6px; }
+.row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.row.sp { justify-content:space-between; }
+.dim { color:var(--dim); } .small { font-size:12px; }
+.ctrl { display:flex; gap:8px; margin-bottom:12px; }
+.ctrl button { flex:1; padding:13px 6px; font-weight:600; }
+#recBtn.rec { background:var(--red); color:#200; animation: pulse 1.4s infinite; }
+@keyframes pulse { 50% { filter:brightness(1.25); } }
+#cruiseBtn.on { background:#1d3a2a; color:var(--green); }
+.tiles { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:12px; }
+.tile { background:var(--card); border-radius:12px; padding:9px 11px; position:relative; border:1px solid transparent; }
+.tile.sel { border-color:var(--c, var(--acc)); }
+.tile .lab { font-size:12px; color:var(--dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding-right:12px; }
+.tile .val { font-size:26px; font-weight:650; font-variant-numeric:tabular-nums; }
+.tile .val small { font-size:13px; color:var(--dim); font-weight:400; margin-left:3px; }
+.tile .mm { font-size:11px; color:var(--dim); font-variant-numeric:tabular-nums; }
+.tile .dot { position:absolute; right:9px; top:10px; width:8px; height:8px; border-radius:50%; background:var(--c); }
+.tile.wide { grid-column: span 2; }
+canvas { width:100%; display:block; background:var(--card); border-radius:12px; }
+.legend { display:flex; gap:12px; flex-wrap:wrap; font-size:12px; margin:6px 2px 0; color:var(--dim); }
+.legend i { display:inline-block; width:10px; height:3px; vertical-align:middle; margin-right:4px; }
+.evlist { margin:0; padding:0; list-style:none; }
+.evlist li { padding:7px 0; border-bottom:1px solid var(--line); font-size:14px; display:flex; gap:8px; }
+.evlist li:last-child { border-bottom:0; }
+.evlist .t { color:var(--dim); font-variant-numeric:tabular-nums; min-width:52px; }
+.ev-down { color:var(--orange); } .ev-flare { color:var(--red); } .ev-mark { color:var(--acc); } .ev-thr { color:#e0c27e; }
+.drive { display:flex; justify-content:space-between; align-items:center; padding:11px 2px; border-bottom:1px solid var(--line); cursor:pointer; }
+.drive:last-child { border-bottom:0; }
+.stats { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; }
+.stats div { background:var(--card2); border-radius:10px; padding:7px 9px; }
+.stats b { display:block; font-size:17px; font-variant-numeric:tabular-nums; }
+.stats span { font-size:11px; color:var(--dim); }
+.chips { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0; }
+.chip { font-size:12px; padding:5px 10px; border-radius:20px; background:var(--card2); border:1px solid var(--line); }
+.chip.on { border-color:var(--c, var(--acc)); color:var(--c, var(--acc)); }
+.setrow { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:9px 0; border-bottom:1px solid var(--line); }
+.setrow:last-child { border-bottom:0; }
+.setrow .l { flex:1; } .setrow .l .small { display:block; }
+.switch { position:relative; width:46px; height:26px; flex:none; }
+.switch input { opacity:0; width:0; height:0; }
+.switch span { position:absolute; inset:0; background:var(--card2); border:1px solid var(--line); border-radius:20px; transition:.2s; }
+.switch span:before { content:''; position:absolute; width:20px; height:20px; left:2px; top:2px; background:var(--dim); border-radius:50%; transition:.2s; }
+.switch input:checked + span { background:#24406b; }
+.switch input:checked + span:before { transform:translateX(20px); background:var(--acc); }
+.dev { display:flex; justify-content:space-between; align-items:center; padding:9px 10px; border-radius:10px; background:var(--card2); margin-bottom:6px; cursor:pointer; border:1px solid transparent; }
+.dev.sel { border-color:var(--acc); }
+.code { display:flex; gap:10px; padding:9px 0; border-bottom:1px solid var(--line); }
+.code b { font-family:ui-monospace, monospace; color:var(--orange); min-width:58px; }
+.pidrow { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--line); font-size:14px; }
+.pidrow.uns { opacity:.45; }
+.pidrow select { padding:4px 6px; }
+#modal { position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; align-items:center; justify-content:center; padding:16px; z-index:20; }
+#modal.on { display:flex; }
+#modal .box { background:var(--card); border-radius:16px; padding:16px; width:100%; max-width:480px; max-height:85vh; overflow:auto; }
+#modal h2 { margin:0 0 10px; font-size:18px; }
+#modal pre { white-space:pre-wrap; word-break:break-all; font-size:11px; background:var(--bg); padding:8px; border-radius:8px; max-height:50vh; overflow:auto; }
+#toast { position:fixed; left:50%; bottom:80px; transform:translateX(-50%); background:#2b3240; color:var(--text); padding:10px 16px; border-radius:22px; font-size:14px; opacity:0; transition:opacity .25s; pointer-events:none; z-index:30; max-width:90vw; text-align:center; }
+#toast.on { opacity:1; }
+.banner { background:#1f2f4d; border-radius:12px; padding:10px 12px; margin-bottom:12px; display:flex; gap:10px; align-items:center; justify-content:space-between; }
+.empty { text-align:center; color:var(--dim); padding:24px 8px; }
+.hint { background:var(--card2); border-radius:10px; padding:9px 11px; font-size:13px; color:var(--dim); margin-top:8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>DriveLog</h1>
+  <span id="status">Not connected</span>
+  <button id="connBtn" class="pri">Connect</button>
+</header>
+
+<main>
+  <!-- LIVE -->
+  <section class="page on" id="p-live">
+    <div id="updBanner" class="banner" style="display:none"></div>
+    <div class="ctrl">
+      <button id="recBtn">● Record</button>
+      <button id="markBtn">⚑ Mark</button>
+      <button id="cruiseBtn">Cruise: off</button>
+    </div>
+    <div id="liveEmpty" class="card empty">Not connected.<br>Tap <b>Connect</b> to start. No adapter yet? Pick <b>Demo truck</b> in Settings &gt; Adapter.</div>
+    <div class="tiles" id="tiles"></div>
+    <div class="card" id="liveChartCard" style="display:none">
+      <h3>Last 2 minutes</h3>
+      <canvas id="liveChart" height="190"></canvas>
+      <div class="legend" id="liveLegend"></div>
+      <div class="small dim" style="margin-top:6px">Tap tiles to choose up to 3 lines.</div>
+    </div>
+    <div class="card" id="liveEvCard" style="display:none">
+      <h3>Events</h3>
+      <ul class="evlist" id="liveEvents"></ul>
+    </div>
+  </section>
+
+  <!-- DRIVES -->
+  <section class="page" id="p-drives">
+    <div id="drivesList"></div>
+    <div id="driveDetail" style="display:none"></div>
+  </section>
+
+  <!-- CODES -->
+  <section class="page" id="p-codes">
+    <div class="card">
+      <h3>Trouble codes</h3>
+      <div class="row">
+        <button class="pri" id="readCodesBtn">Read codes</button>
+        <button class="danger" id="clearCodesBtn">Clear codes…</button>
+      </div>
+      <div id="codesOut" style="margin-top:10px" class="dim small">Connect, then tap Read codes. Stored codes are the ones that turned on the check-engine light; pending codes are problems seen once that haven't confirmed yet.</div>
+    </div>
+    <div class="card">
+      <h3>Truck info</h3>
+      <div id="truckInfo" class="small dim">Connect to see the protocol, supported sensors and battery voltage.</div>
+    </div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section class="page" id="p-settings">
+    <div class="card">
+      <h3>Adapter</h3>
+      <div id="devList"></div>
+      <div class="row" style="margin-top:6px">
+        <button id="refreshDevBtn">Refresh list</button>
+        <button id="btSettingsBtn">Pair a new adapter…</button>
+      </div>
+      <div class="hint">Pair the adapter once in your phone's Bluetooth settings (PIN is usually <b>1234</b> or <b>0000</b>), then pick it here. Plug it in and turn the ignition on before connecting.</div>
+      <div class="setrow"><div class="l">Protocol<span class="small dim">Your 2005 Colorado uses J1850 VPW. Auto also works but the first connect is slower.</span></div>
+        <select id="protoSel">
+          <option value="0">Auto</option>
+          <option value="2">J1850 VPW (GM up to ~2007)</option>
+          <option value="1">J1850 PWM (Ford up to ~2007)</option>
+          <option value="3">ISO 9141-2</option>
+          <option value="5">KWP2000 fast</option>
+          <option value="6">CAN 11-bit 500k (2008+)</option>
+          <option value="7">CAN 29-bit 500k</option>
+        </select></div>
+    </div>
+
+    <div class="card">
+      <h3>Recording</h3>
+      <div class="setrow"><div class="l">Keep screen on while recording<span class="small dim">Logging pauses if the screen turns off.</span></div><label class="switch"><input type="checkbox" id="setScreen"><span></span></label></div>
+      <div class="setrow"><div class="l">Units</div><select id="setUnits"><option value="us">US (mph, °F, psi)</option><option value="metric">Metric (km/h, °C, kPa)</option></select></div>
+      <div class="setrow"><div class="l">Fast replies<span class="small dim">Tells the adapter to expect one answer per question (faster). Turns itself off if the adapter doesn't support it.</span></div><label class="switch"><input type="checkbox" id="setFast"><span></span></label></div>
+    </div>
+
+    <div class="card">
+      <h3>Sensors to log</h3>
+      <div class="small dim" style="margin-bottom:6px"><b>Fast</b> sensors are read every cycle; <b>Normal</b> ones take turns (each about every few seconds). Fewer fast sensors = more readings per second. Greyed out = the truck doesn't report it (shown after connecting).</div>
+      <div id="pidList"></div>
+    </div>
+
+    <div class="card">
+      <h3>Gear calculation</h3>
+      <div class="small dim" style="margin-bottom:6px">The truck doesn't report the gear, so DriveLog works it out from RPM ÷ speed. Easiest: record a normal drive, open it under Drives and tap <b>Learn gears from this drive</b>.</div>
+      <div class="setrow"><div class="l">Gear ratios<span class="small dim">4L60-E automatic: 3.06, 1.63, 1.00, 0.70</span></div><input type="text" id="setGears" style="width:150px"></div>
+      <div class="setrow"><div class="l">Axle ratio</div><input type="number" step="0.01" id="setAxle"></div>
+      <div class="setrow"><div class="l">Tire diameter (inches)</div><input type="number" step="0.1" id="setTire"></div>
+      <div class="setrow"><div class="l">RPM per mph in 1:1 gear<span class="small dim">Calculated from the two above, or learned from a drive.</span></div><span id="kVal" class="dim"></span></div>
+    </div>
+
+    <div class="card">
+      <h3>Event detection</h3>
+      <div class="setrow"><div class="l">RPM jump<span class="small dim">Flag when RPM rises this much within 2 s while speed stays about the same.</span></div><input type="number" step="50" id="setRpmJump"></div>
+      <div class="setrow"><div class="l">Throttle jump (%)<span class="small dim">Flag when throttle opens this much within 1 s.</span></div><input type="number" step="1" id="setTpsJump"></div>
+    </div>
+
+    <div class="card">
+      <h3>App</h3>
+      <div class="setrow"><div class="l">Version</div><span id="verVal" class="dim"></span></div>
+      <div class="setrow"><div class="l">Updates<span class="small dim" id="updText"></span></div><button id="updBtn">Check now</button></div>
+      <div class="setrow"><div class="l">Debug log<span class="small dim">Records everything sent to and from the adapter. Turn on if something doesn't work, then send me the report.</span></div><label class="switch"><input type="checkbox" id="setDebug"><span></span></label></div>
+      <div class="row" style="margin-top:8px"><button id="viewLogBtn">View debug log</button></div>
+    </div>
+  </section>
+</main>
+
+<nav>
+  <button data-p="live" class="on">Live</button>
+  <button data-p="drives">Drives</button>
+  <button data-p="codes">Codes</button>
+  <button data-p="settings">Settings</button>
+</nav>
+
+<div id="modal"><div class="box" id="modalBox"></div></div>
+<div id="toast"></div>
+
+<script>
+'use strict';
+/* =====================================================================
+   Basics
+   ===================================================================== */
+const $ = id => document.getElementById(id);
+const NATIVE = !!(window.AndroidDL && AndroidDL.isNative && AndroidDL.isNative());
+const HASH = new URLSearchParams(location.hash.slice(1));
+const VERSION = HASH.get('v') || 'browser';
+const VCODE = parseInt(HASH.get('vc') || '0', 10);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+let toastT = 0;
+function toast(msg, ms = 2600) { const t = $('toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('on'), ms); }
+window.toast = toast;
+function fmtDur(ms) { const s = Math.round(ms / 1000), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), ss = s % 60; return h ? `${h}h ${m}m` : m ? `${m}m ${ss}s` : `${ss}s`; }
+function fmtClock(ms) { const s = Math.max(0, Math.round(ms / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+function pad(n, w = 2) { return String(n).padStart(w, '0'); }
+function stamp(d) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`; }
+
+/* =====================================================================
+   Settings
+   ===================================================================== */
+const SKEY = 'drivelog.settings.v1';
+const DEFAULTS = {
+  device: '', deviceName: '', proto: '2', units: 'us', fast: true, screen: true, debug: false,
+  gears: [3.06, 1.63, 1.00, 0.70], axle: 3.73, tire: 30.0, kLearned: null,
+  rpmJump: 500, tpsJump: 15, pidMode: {}, chart: ['0C', '0D', '11'], lastUpdCheck: 0
+};
+let S = Object.assign({}, DEFAULTS);
+try { Object.assign(S, JSON.parse(localStorage.getItem(SKEY) || '{}')); } catch (e) { Log.warn('settings unreadable, using defaults'); }
+function saveSettings() { try { localStorage.setItem(SKEY, JSON.stringify(S)); } catch (e) { Log.err('settings save failed'); } }
+function kFactor() { return S.kLearned || (336.13 * S.axle / S.tire); }  // rpm per mph in a 1.00 gear
+
+/* =====================================================================
+   Sensors (OBD2 mode 01 PIDs). f() gets the data bytes, returns metric base units.
+   ===================================================================== */
+const PIDS = {
+  '0C': { n: 'Engine RPM', s: 'RPM', u: 'rpm', d: 0, f: a => (a[0] * 256 + a[1]) / 4 },
+  '0D': { n: 'Vehicle speed', s: 'Speed', k: 'speed', d: 0, f: a => a[0] },
+  '11': { n: 'Throttle position', s: 'Throttle', u: '%', d: 0, f: a => a[0] * 100 / 255 },
+  '04': { n: 'Engine load', s: 'Load', u: '%', d: 0, f: a => a[0] * 100 / 255 },
+  '49': { n: 'Accelerator pedal', s: 'Pedal', u: '%', d: 0, f: a => a[0] * 100 / 255 },
+  '4C': { n: 'Commanded throttle', s: 'Cmd throttle', u: '%', d: 0, f: a => a[0] * 100 / 255 },
+  '05': { n: 'Coolant temp', s: 'Coolant', k: 'temp', d: 0, f: a => a[0] - 40 },
+  '0F': { n: 'Intake air temp', s: 'Intake air', k: 'temp', d: 0, f: a => a[0] - 40 },
+  '0B': { n: 'Intake manifold pressure', s: 'MAP', k: 'press', d: 1, f: a => a[0] },
+  '10': { n: 'Mass air flow', s: 'MAF', u: 'g/s', d: 1, f: a => (a[0] * 256 + a[1]) / 100 },
+  '0E': { n: 'Ignition timing advance', s: 'Timing', u: '°', d: 1, f: a => a[0] / 2 - 64 },
+  '06': { n: 'Short-term fuel trim (bank 1)', s: 'STFT', u: '%', d: 1, f: a => (a[0] - 128) * 100 / 128 },
+  '07': { n: 'Long-term fuel trim (bank 1)', s: 'LTFT', u: '%', d: 1, f: a => (a[0] - 128) * 100 / 128 },
+  '08': { n: 'Short-term fuel trim (bank 2)', s: 'STFT B2', u: '%', d: 1, f: a => (a[0] - 128) * 100 / 128 },
+  '09': { n: 'Long-term fuel trim (bank 2)', s: 'LTFT B2', u: '%', d: 1, f: a => (a[0] - 128) * 100 / 128 },
+  '14': { n: 'O2 sensor, bank 1 sensor 1 (upstream)', s: 'O2 up', u: 'V', d: 2, f: a => a[0] / 200 },
+  '15': { n: 'O2 sensor, bank 1 sensor 2 (downstream)', s: 'O2 down', u: 'V', d: 2, f: a => a[0] / 200 },
+  '0A': { n: 'Fuel pressure', s: 'Fuel press', k: 'press', d: 1, f: a => a[0] * 3 },
+  '2F': { n: 'Fuel level', s: 'Fuel', u: '%', d: 0, f: a => a[0] * 100 / 255 },
+  '33': { n: 'Barometric pressure', s: 'Baro', k: 'press', d: 1, f: a => a[0] },
+  '42': { n: 'Computer (ECU) voltage', s: 'ECU volts', u: 'V', d: 1, f: a => (a[0] * 256 + a[1]) / 1000 },
+  '43': { n: 'Absolute load', s: 'Abs load', u: '%', d: 0, f: a => (a[0] * 256 + a[1]) * 100 / 255 },
+  '44': { n: 'Commanded air-fuel ratio (lambda)', s: 'Cmd λ', u: 'λ', d: 3, f: a => (a[0] * 256 + a[1]) / 32768 },
+  '45': { n: 'Relative throttle', s: 'Rel throttle', u: '%', d: 0, f: a => a[0] * 100 / 255 },
+  '46': { n: 'Outside air temp', s: 'Outside', k: 'temp', d: 0, f: a => a[0] - 40 },
+  '47': { n: 'Throttle position B', s: 'Throttle B', u: '%', d: 0, f: a => a[0] * 100 / 255 },
+  '4A': { n: 'Accelerator pedal E', s: 'Pedal E', u: '%', d: 0, f: a => a[0] * 100 / 255 },
+  '2C': { n: 'Commanded EGR', s: 'EGR', u: '%', d: 0, f: a => a[0] * 100 / 255 },
+  '2E': { n: 'Commanded evap purge', s: 'Evap purge', u: '%', d: 0, f: a => a[0] * 100 / 255 },
+  '3C': { n: 'Catalyst temp (bank 1)', s: 'Cat temp', k: 'temp', d: 0, f: a => (a[0] * 256 + a[1]) / 10 - 40 },
+  '5C': { n: 'Engine oil temp', s: 'Oil temp', k: 'temp', d: 0, f: a => a[0] - 40 },
+  '1F': { n: 'Time since engine start', s: 'Run time', u: 's', d: 0, f: a => a[0] * 256 + a[1] },
+  '21': { n: 'Distance with check-engine light on', s: 'MIL dist', k: 'dist', d: 0, f: a => a[0] * 256 + a[1] },
+  'RV': { n: 'Battery voltage (from adapter)', s: 'Battery', u: 'V', d: 1, adapter: true }
+};
+const PID_ORDER = Object.keys(PIDS);
+const FAST_DEFAULT = ['0C', '0D', '11', '04', '49', '4C'];
+const UNITS = {
+  us: { temp: ['°F', c => c * 9 / 5 + 32], speed: ['mph', k => k * 0.621371], press: ['psi', k => k * 0.145038], dist: ['mi', k => k * 0.621371] },
+  metric: { temp: ['°C', c => c], speed: ['km/h', k => k], press: ['kPa', k => k], dist: ['km', k => k] }
+};
+function unitOf(pid) { const p = PIDS[pid]; return p.k ? UNITS[S.units][p.k][0] : p.u; }
+function toDisp(pid, v) { const p = PIDS[pid]; return (v == null || !p.k) ? v : UNITS[S.units][p.k][1](v); }
+function pidMode(pid) {
+  if (S.pidMode[pid]) return S.pidMode[pid];
+  return FAST_DEFAULT.includes(pid) ? 'fast' : 'normal';
+}
+
+/* =====================================================================
+   Transports: real Bluetooth (via Android bridge) or a simulated truck
+   ===================================================================== */
+window.DLNative = { onData() {}, onState() {}, onPermission() {}, onUpdateInfo() {}, onUpdateProgress() {} };
+
+const NativeTransport = {
+  name: 'bt',
+  connect(address) {
+    return new Promise(resolve => {
+      DLNative.onState = (st, msg) => {
+        Log.info('BT state ' + st + (msg ? ': ' + msg : ''));
+        if (st === 'connected') resolve({ ok: true });
+        else if (st === 'error') resolve({ ok: false, msg });
+        else if (st === 'disconnected') Conn.lost(msg || 'Disconnected');
+      };
+      DLNative.onData = s => Elm.onData(s);
+      AndroidDL.connect(address);
+    });
+  },
+  write(s) { AndroidDL.write(s); },
+  close() { DLNative.onState = () => {}; AndroidDL.disconnect(); }
+};
+
+/* A pretend ELM327 + 2005 Colorado: drives off, cruises at 65 and hits a hill every ~45 s where the
+   "cruise control" kicks it down from 4th to 2nd. Lets you try everything before the adapter arrives. */
+const DemoTruck = {
+  name: 'demo',
+  K: 41.8, ratios: [3.06, 1.63, 1.00, 0.70],
+  supported: ['04', '05', '06', '07', '0C', '0D', '0E', '0F', '10', '11', '14', '15', '1F', '2F', '33', '42', '46', '49', '4C'],
+  connect() {
+    this.t0 = performance.now(); this.echo = true; this.spaces = true; this.searched = false; this.open = true; this.coolant = 62;
+    DLNative.onData = s => Elm.onData(s);
+    return sleep(500).then(() => ({ ok: true }));
+  },
+  close() { this.open = false; },
+  write(s) {
+    const cmd = s.replace(/\r/g, '').trim().toUpperCase();
+    const reply = this.reply(cmd);
+    const delay = cmd.startsWith('AT') ? 15 : (cmd === '0100' && !this.searched) ? 1500 : 38 + Math.random() * 25;
+    if (cmd === '0100') this.searched = true;
+    setTimeout(() => { if (this.open) Elm.onData((this.echo ? cmd + '\r' : '') + reply + '\r\r>'); }, delay);
+  },
+  hex(bytes) { return bytes.map(b => pad(Math.max(0, Math.min(255, Math.round(b))).toString(16).toUpperCase())).join(this.spaces ? ' ' : ''); },
+  state() {
+    const t = (performance.now() - this.t0) / 1000;
+    let mph, gear, tps, load, slip;
+    if (t < 6) { mph = 0; gear = 0; tps = 0; load = 22; }
+    else if (t < 30) {
+      const u = (t - 6) / 24; mph = 65 * Math.sin(u * Math.PI / 2);
+      gear = mph < 16 ? 1 : mph < 30 ? 2 : mph < 44 ? 3 : 4; tps = 38 - u * 18; load = 60 - u * 25;
+    } else {
+      const c = (t - 30) % 45;  // hill cycle
+      mph = 65; gear = 4; tps = 17; load = 33;
+      if (c > 20 && c < 36) { tps = 17 + Math.min(1, (c - 20) / 2) * 22; load = 58; mph = 65 - Math.min(3, (c - 20)); }
+      if (c > 23 && c < 30) { gear = 2; tps = 42; load = 72; mph = 62 + (c - 23) * 0.4; }
+      else if (c >= 30 && c < 33) { gear = 3; tps = 30; load = 55; }
+    }
+    slip = gear >= 3 ? 0.015 : 0.06;
+    const rpm = gear === 0 ? 690 + Math.random() * 25 : Math.max(800, mph * this.K * this.ratios[gear - 1] * (1 + slip));
+    this.coolant = Math.min(92, this.coolant + 0.02);
+    return { t, mph: mph + (mph > 1 ? Math.random() * 0.6 - 0.3 : 0), rpm: rpm + Math.random() * 20 - 10, tps, load };
+  },
+  reply(cmd) {
+    if (cmd === 'ATZ') { this.echo = true; this.spaces = true; return '\r\rELM327 v1.5'; }
+    if (cmd === 'ATE0') { this.echo = false; return 'OK'; }
+    if (cmd === 'ATS0') { this.spaces = false; return 'OK'; }
+    if (cmd === 'ATI') return 'ELM327 v1.5';
+    if (cmd === 'ATDP') return 'SAE J1850 VPW';
+    if (cmd === 'ATDPN') return '2';
+    if (cmd === 'ATRV') return (13.9 + Math.random() * 0.2).toFixed(1) + 'V';
+    if (cmd.startsWith('AT')) return 'OK';
+    if (cmd === '03') return this.hex([0x43, 0x01, 0x71, 0x04, 0x20, 0, 0]);  // P0171, P0420
+    if (cmd === '07') return this.hex([0x47, 0x03, 0x00, 0, 0, 0, 0]);         // P0300 pending
+    if (cmd === '04') return '44';
+    const m = /^01([0-9A-F]{2})1?$/.exec(cmd);
+    if (!m) return '?';
+    const pid = m[1];
+    const pre = (cmd === '0100' && !this.searched) ? 'SEARCHING...\r' : '';
+    if (pid === '00' || pid === '20' || pid === '40') {
+      const base = parseInt(pid, 16); let bits = 0;
+      for (const p of this.supported) { const n = parseInt(p, 16); if (n > base && n <= base + 32) bits |= 1 << (32 - (n - base)) >>> 0; }
+      if (base === 0) bits |= 1; if (base === 0x20) bits |= 1;  // more ranges follow
+      bits >>>= 0;
+      return pre + this.hex([0x41, base, bits >>> 24 & 255, bits >>> 16 & 255, bits >>> 8 & 255, bits & 255]);
+    }
+    if (!this.supported.includes(pid)) return 'NO DATA';
+    const s = this.state(), P = parseInt(pid, 16);
+    const one = v => this.hex([0x41, P, v]), two = v => this.hex([0x41, P, v >> 8 & 255, v & 255]);
+    switch (pid) {
+      case '0C': return two(Math.round(s.rpm * 4));
+      case '0D': return one(s.mph / 0.621371);
+      case '11': return one(s.tps * 2.55 + 30);
+      case '4C': return one(s.tps * 2.55);
+      case '49': return one(s.t > 30 ? 36 : s.tps * 2.55 + 36);  // foot off the pedal while on cruise
+      case '04': return one(s.load * 2.55);
+      case '05': return one(this.coolant + 40);
+      case '0F': return one(24 + 40);
+      case '46': return one(18 + 40);
+      case '06': return one(128 + (Math.random() * 8 - 3));
+      case '07': return one(128 + 9);
+      case '0E': return one((s.load > 55 ? 14 : 26) * 2 + 128);
+      case '10': return two(Math.round((s.rpm * s.load / 4200) * 100));
+      case '14': return this.hex([0x41, P, 20 + Math.random() * 150, 0xFF]);
+      case '15': return this.hex([0x41, P, 130 + Math.random() * 10, 0xFF]);
+      case '1F': return two(Math.round(s.t));
+      case '2F': return one(150);
+      case '33': return one(98);
+      case '42': return two(13900 + Math.round(Math.random() * 200));
+    }
+    return 'NO DATA';
+  }
+};
+
+/* =====================================================================
+   ELM327 conversation: one command at a time, answer ends with '>'
+   ===================================================================== */
+const Elm = {
+  buf: '', pending: null, chain: Promise.resolve(), transport: null,
+  onData(s) {
+    this.buf += s;
+    const i = this.buf.indexOf('>');
+    if (i < 0 || !this.pending) { if (i >= 0) this.buf = this.buf.slice(i + 1); return; }
+    const raw = this.buf.slice(0, i); this.buf = this.buf.slice(i + 1);
+    const p = this.pending; this.pending = null; clearTimeout(p.timer);
+    const text = this.clean(raw, p.cmd);
+    Log.raw('< ' + text.replace(/\n/g, ' | '));
+    p.resolve(text);
+  },
+  clean(raw, cmd) {
+    return raw.replace(/\r/g, '\n').split('\n').map(l => l.trim())
+      .filter(l => l && l.toUpperCase() !== cmd && !/^SEARCHING/i.test(l) && !/^BUS ?INIT/i.test(l)).join('\n');
+  },
+  send(cmd, timeout = 2500) {
+    const run = () => new Promise(resolve => {
+      if (!this.transport) return resolve('NOT CONNECTED');
+      this.buf = '';
+      this.pending = { cmd, resolve, timer: setTimeout(() => { this.pending = null; Log.raw('< (no answer to ' + cmd + ')'); resolve('TIMEOUT'); }, timeout) };
+      Log.raw('> ' + cmd);
+      try { this.transport.write(cmd + '\r'); } catch (e) { clearTimeout(this.pending.timer); this.pending = null; resolve('ERROR'); }
+    });
+    const p = this.chain.then(run, run);
+    this.chain = p;
+    return p;
+  },
+  bytesFor(resp, mode, pid) {
+    // Finds "41 0C ..." in the answer (headers off, spaces maybe on). Returns the data bytes or null.
+    const want = (mode + pid).toUpperCase();
+    for (let line of resp.split('\n')) {
+      line = line.replace(/\s/g, '').toUpperCase();
+      if (/^[0-9A-F]+:/.test(line)) line = line.replace(/^[0-9A-F]+:/, '');
+      const at = line.indexOf(want);
+      if (at === 0 && /^[0-9A-F]+$/.test(line)) {
+        const hex = line.slice(want.length), out = [];
+        for (let i = 0; i + 1 < hex.length; i += 2) out.push(parseInt(hex.substr(i, 2), 16));
+        return out;
+      }
+    }
+    return null;
+  }
+};
+
+/* =====================================================================
+   Connection + polling
+   ===================================================================== */
+const Conn = {
+  state: 'off', supported: new Set(), protoName: '', elmVersion: '', polling: false, timeouts: 0, fastOk: true,
+  setStatus(text, cls) { const st = $('status'); st.textContent = text; st.className = cls || ''; },
+  async start() {
+    if (this.state !== 'off') return this.stop('');
+    const demo = S.device === 'demo' || !NATIVE;
+    if (!demo && !S.device) { toast('Pick your adapter first'); go('settings'); return; }
+    if (!demo) {
+      const st = JSON.parse(AndroidDL.btStatus() || '{}');
+      if (!st.permission) { AndroidDL.requestBtPermission(); DLNative.onPermission = ok => { if (ok) this.start(); else toast('DriveLog needs the Nearby devices permission to use Bluetooth'); }; return; }
+      if (!st.enabled) { toast('Turn on Bluetooth first'); return; }
+    }
+    this.state = 'connecting'; render.conn();
+    const tr = demo ? DemoTruck : NativeTransport;
+    this.setStatus(demo ? 'Starting demo…' : 'Connecting to adapter…', 'busy');
+    Log.info('Connecting via ' + tr.name + ' ' + (demo ? '' : S.device));
+    const r = await tr.connect(S.device);
+    if (this.state !== 'connecting') return;
+    if (!r.ok) { this.state = 'off'; this.setStatus('Not connected', 'bad'); render.conn(); popup('Could not connect to the adapter', `<p>${esc(r.msg || 'Unknown error')}</p><p class="dim small">Check that the adapter is plugged in, the ignition is on, it's paired in your phone's Bluetooth settings, and no other app (like Car Scanner) is connected to it.</p>`); return; }
+    Elm.transport = tr; Elm.buf = '';
+    this.state = 'init'; this.setStatus('Setting up adapter…', 'busy');
+    const ok = await this.init();
+    if (!ok) return;
+    this.state = 'on'; this.timeouts = 0;
+    this.setStatus((demo ? 'Demo · ' : '') + (this.protoName || 'Connected'), 'ok');
+    render.conn(); render.tiles(); render.pidList(); render.truckInfo();
+    this.poll();
+  },
+  async init() {
+    let r = await Elm.send('ATZ', 4000);
+    this.elmVersion = (r.match(/ELM327[^\n]*/i) || [''])[0] || r.split('\n').pop();
+    for (const c of ['ATE0', 'ATL0', 'ATS0', 'ATH0', 'ATAT1', 'ATSP' + S.proto]) { await Elm.send(c, 1500); }
+    this.setStatus('Talking to the truck…', 'busy');
+    r = await Elm.send('0100', 15000);
+    let b = Elm.bytesFor(r, '41', '00');
+    if (!b && S.proto !== '0') {  // wrong protocol? try auto once
+      Log.warn('No answer on protocol ' + S.proto + ' (' + r + '), trying auto');
+      await Elm.send('ATSP0', 1500); r = await Elm.send('0100', 15000); b = Elm.bytesFor(r, '41', '00');
+    }
+    if (!b) {
+      this.stop('');
+      popup('Adapter connected, but the truck didn\'t answer', `<p>The adapter said: <code>${esc(r || 'nothing')}</code></p><p class="dim small">Turn the ignition to ON (or start the engine), check the adapter is pushed fully into the port, then connect again. If it still fails, try Protocol: Auto in Settings.</p>`);
+      return false;
+    }
+    this.supported = new Set(['RV']);
+    const addMask = (base, bytes) => { for (let i = 0; i < 32; i++) if (bytes[i >> 3] & (0x80 >> (i & 7))) this.supported.add(pad((base + i + 1).toString(16).toUpperCase())); };
+    addMask(0, b);
+    for (const base of [0x20, 0x40]) {
+      if (!this.supported.has(pad(base.toString(16).toUpperCase()))) break;
+      const rr = await Elm.send('01' + pad(base.toString(16).toUpperCase()), 3000);
+      const bb = Elm.bytesFor(rr, '41', pad(base.toString(16).toUpperCase()));
+      if (bb) addMask(base, bb); else break;
+    }
+    this.protoName = (await Elm.send('ATDP', 1500)).replace(/^AUTO,\s*/i, '');
+    Log.info('Supported: ' + [...this.supported].join(','));
+    this.fastOk = true;
+    return true;
+  },
+  stop(msg) {
+    const was = this.state;
+    this.state = 'off'; this.polling = false;
+    if (Elm.pending) { clearTimeout(Elm.pending.timer); Elm.pending.resolve('STOPPED'); Elm.pending = null; }
+    if (Elm.transport) { try { Elm.transport.close(); } catch (e) {} }
+    Elm.transport = null;
+    if (Rec.on) Rec.stop();
+    this.setStatus(msg || 'Not connected', msg ? 'bad' : '');
+    if (was !== 'off') render.conn();
+  },
+  lost(msg) { if (this.state !== 'off') { Log.warn('Connection lost: ' + msg); this.stop('Connection lost'); toast(msg); } },
+  plan() {
+    const use = PID_ORDER.filter(p => this.supported.has(p) && pidMode(p) !== 'off');
+    return { fast: use.filter(p => pidMode(p) === 'fast'), slow: use.filter(p => pidMode(p) === 'normal') };
+  },
+  async readPid(pid) {
+    if (pid === 'RV') {
+      const r = await Elm.send('ATRV', 1500); const m = /([\d.]+)\s*V/i.exec(r);
+      return m ? parseFloat(m[1]) : null;
+    }
+    const fast = S.fast && this.fastOk;
+    const r = await Elm.send('01' + pid + (fast ? '1' : ''), 1500);
+    if (r === 'TIMEOUT') { this.timeouts++; return undefined; }
+    if (r === 'STOPPED' || r === 'NOT CONNECTED') return undefined;
+    this.timeouts = 0;
+    if (fast && r.trim() === '?') { this.fastOk = false; Log.warn('Adapter does not support fast replies; turned them off'); return this.readPid(pid); }
+    const b = Elm.bytesFor(r, '41', pid);
+    if (!b || !b.length) return null;
+    try { const v = PIDS[pid].f(b); return isFinite(v) ? v : null; } catch (e) { return null; }
+  },
+  async poll() {
+    if (this.polling) return;
+    this.polling = true;
+    let slowIdx = 0;
+    while (this.state === 'on' && this.polling) {
+      const t0 = performance.now();
+      const { fast, slow } = this.plan();
+      const list = fast.slice();
+      if (slow.length) list.push(slow[slowIdx++ % slow.length]);
+      if (!list.length) { await sleep(500); continue; }
+      for (const pid of list) {
+        if (this.state !== 'on') break;
+        const v = await this.readPid(pid);
+        if (v !== undefined) Live.raw[pid] = v;
+      }
+      if (this.state !== 'on') break;
+      if (this.timeouts >= 6) { this.lost('The adapter stopped answering'); break; }
+      Live.cycle();
+      const el = performance.now() - t0;
+      if (el < 120) await sleep(120 - el);
+    }
+    this.polling = false;
+  }
+};
+
+/* =====================================================================
+   Live values, gear, events
+   ===================================================================== */
+function gearFor(rpm, mph) {
+  if (rpm == null || mph == null || mph < 8 || rpm < 500) return { gear: null, slip: null };
+  const r = rpm / mph, K = kFactor();
+  let best = null, bestErr = 9;
+  S.gears.forEach((g, i) => { const e = (r - K * g) / (K * g); if (Math.abs(e) < Math.abs(bestErr)) { bestErr = e; best = i + 1; } });
+  if (bestErr > -0.06 && bestErr < 0.12) return { gear: best, slip: bestErr };
+  return { gear: null, slip: bestErr };
+}
+
+const Live = {
+  raw: {}, min: {}, max: {}, hist: [], events: [], cruise: false, lastEvT: 0, pendingJump: null, lastUi: 0,
+  reset() { this.raw = {}; this.min = {}; this.max = {}; this.hist = []; this.pendingJump = null; },
+  sample() {
+    const disp = {};
+    for (const p in this.raw) disp[p] = toDisp(p, this.raw[p]);
+    const mph = this.raw['0D'] == null ? null : this.raw['0D'] * 0.621371;
+    const g = gearFor(this.raw['0C'], mph);
+    return { t: Date.now(), disp, rpm: this.raw['0C'], mph, tps: this.raw['11'], gear: g.gear, slip: g.slip };
+  },
+  cycle() {
+    const s = this.sample();
+    for (const p in s.disp) { const v = s.disp[p]; if (v == null) continue; if (!(this.min[p] <= v)) this.min[p] = v; if (!(this.max[p] >= v)) this.max[p] = v; }
+    this.hist.push(s);
+    while (this.hist.length && s.t - this.hist[0].t > 125000) this.hist.shift();
+    const ev = this.detect(s);
+    if (ev) this.addEvent(ev, s.t);
+    if (Rec.on) Rec.add(s, ev);
+    if (s.t - this.lastUi > 250) { this.lastUi = s.t; render.liveValues(s); }
+  },
+  addEvent(text, t) {
+    const e = { t, text: text + (this.cruise ? ' [cruise]' : '') };
+    this.events.unshift(e); this.events = this.events.slice(0, 30);
+    if (Rec.on) Rec.event(e);
+    render.liveEvents();
+    Log.info('Event: ' + e.text);
+  },
+  mark() {
+    if (Conn.state !== 'on') return toast('Not connected');
+    const s = this.sample();
+    const text = 'Marked' + (s.rpm != null ? ` (${Math.round(s.rpm)} rpm, ${s.mph == null ? '?' : Math.round(s.mph)} mph)` : '');
+    this.addEvent(text, s.t);
+    if (Rec.on) Rec.add(s, this.events[0].text);
+    toast('Marked');
+  },
+  detect(s) {
+    const h = this.hist;
+    // finish a pending RPM jump once the gear has settled (~1.2 s later)
+    if (this.pendingJump && s.t - this.pendingJump.t >= 1200) {
+      const pj = this.pendingJump; this.pendingJump = null;
+      const recent = h.filter(x => s.t - x.t <= 600);
+      const counts = {}; recent.forEach(x => { const k = x.gear == null ? 'x' : x.gear; counts[k] = (counts[k] || 0) + 1; });
+      const after = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0];
+      const g2 = after === 'x' || after == null ? null : +after;
+      let text;
+      if (pj.g1 && g2 && g2 < pj.g1) text = `Downshift ${pj.g1}→${g2} (+${pj.dr} rpm)`;
+      else if (!g2) text = `RPM flare, no gear matches (+${pj.dr} rpm) — possible slip`;
+      else text = `RPM jump (+${pj.dr} rpm, gear ${g2})`;
+      this.lastEvT = s.t;
+      return text;
+    }
+    if (this.pendingJump || s.t - this.lastEvT < 4000 || s.rpm == null || s.mph == null) return null;
+    const past = h.filter(x => s.t - x.t <= 2000 && s.t - x.t >= 250 && x.rpm != null && x.mph != null);
+    if (past.length && s.mph >= 20) {
+      const base = past.reduce((a, b) => b.rpm < a.rpm ? b : a);
+      const dr = Math.round(s.rpm - base.rpm);
+      if (dr >= S.rpmJump && Math.abs(s.mph - base.mph) <= 4) {
+        const before = h.filter(x => base.t - x.t >= 0 && base.t - x.t <= 1500 && x.gear != null);
+        const g1 = before.length ? before[before.length - 1].gear : base.gear;
+        this.pendingJump = { t: s.t, dr, g1 };
+        this.lastEvT = s.t;
+        return null;
+      }
+    }
+    const tp = h.filter(x => s.t - x.t <= 1000 && x.tps != null);
+    if (tp.length > 1 && s.tps != null && s.mph >= 20) {
+      const mn = Math.min(...tp.map(x => x.tps));
+      if (s.tps - mn >= S.tpsJump) { this.lastEvT = s.t; return `Throttle jump (+${Math.round(s.tps - mn)}%, now ${Math.round(s.tps)}%)`; }
+    }
+    return null;
+  }
+};
+
+/* =====================================================================
+   Storage of drives (Android: app files; browser: localStorage) + recording
+   ===================================================================== */
+const Store = NATIVE ? {
+  write: (n, t, a) => AndroidDL.storeWrite(n, t, !!a),
+  read: n => AndroidDL.storeRead(n),
+  list: () => JSON.parse(AndroidDL.storeList() || '[]'),
+  del: n => AndroidDL.storeDelete(n)
+} : {
+  write(n, t, a) { try { localStorage.setItem('dlf:' + n, (a ? (localStorage.getItem('dlf:' + n) || '') : '') + t); return true; } catch (e) { Log.err('browser storage full'); return false; } },
+  read: n => localStorage.getItem('dlf:' + n),
+  list() { const o = []; for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith('dlf:')) o.push(k.slice(4)); } return o; },
+  del(n) { localStorage.removeItem('dlf:' + n); return true; }
+};
+
+const Rec = {
+  on: false, meta: null, buf: [], flushT: 0,
+  start() {
+    if (Conn.state !== 'on') return toast('Connect first');
+    const { fast, slow } = Conn.plan();
+    const cols = [...fast, ...slow];
+    const id = 'd' + Date.now();
+    this.meta = { id, start: Date.now(), end: Date.now(), rows: 0, cols: cols.map(p => ({ k: p, label: PIDS[p].s, unit: unitOf(p) })), units: S.units,
+      events: [], demo: Elm.transport === DemoTruck, proto: Conn.protoName, k: kFactor(), gears: S.gears.slice(), app: VERSION };
+    this.buf = []; this.on = true;
+    Store.write(id + '.rows', '', false);
+    this.saveMeta();
+    this.flushT = setInterval(() => this.flush(), 2000);
+    if (NATIVE && S.screen) AndroidDL.keepScreenOn(true);
+    render.conn(); toast('Recording');
+    Log.info('Recording ' + id + ' cols ' + cols.join(','));
+  },
+  add(s, ev) {
+    const row = [s.t, s.gear == null ? null : s.gear, Live.cruise ? 1 : 0, ev || '', ...this.meta.cols.map(c => {
+      const v = s.disp[c.k]; return v == null ? null : +v.toFixed(Math.min(3, PIDS[c.k].d + 1));
+    })];
+    this.buf.push(row); this.meta.rows++; this.meta.end = s.t;
+  },
+  event(e) { if (this.meta) { this.meta.events.push(e); this.saveMeta(); } },
+  flush() {
+    if (!this.meta || !this.buf.length) return;
+    const text = this.buf.map(r => JSON.stringify(r)).join('\n') + '\n';
+    if (Store.write(this.meta.id + '.rows', text, true)) this.buf = [];
+    this.saveMeta();
+  },
+  saveMeta() { if (this.meta) Store.write(this.meta.id + '.json', JSON.stringify(this.meta), false); },
+  stop() {
+    if (!this.on) return;
+    clearInterval(this.flushT); this.flush();
+    this.meta.done = true; this.saveMeta();
+    this.on = false;
+    if (NATIVE) AndroidDL.keepScreenOn(false);
+    toast(`Saved drive: ${fmtDur(this.meta.end - this.meta.start)}, ${this.meta.rows} rows`);
+    Log.info('Stopped recording ' + this.meta.id);
+    this.meta = null; render.conn(); render.drives();
+  }
+};
+window.saveNow = () => { try { Rec.flush(); } catch (e) {} };
+
+const Drives = {
+  list() {
+    const out = [];
+    for (const n of Store.list()) if (n.endsWith('.json')) { try { out.push(JSON.parse(Store.read(n))); } catch (e) { Log.warn('bad drive file ' + n); } }
+    return out.sort((a, b) => b.start - a.start);
+  },
+  rows(id) {
+    const t = Store.read(id + '.rows') || '';
+    const out = [];
+    for (const line of t.split('\n')) { if (!line) continue; try { out.push(JSON.parse(line)); } catch (e) { /* half-written last line */ } }
+    return out;
+  },
+  del(id) { Store.del(id + '.json'); Store.del(id + '.rows'); },
+  csv(meta, rows) {
+    const head = ['time', 'elapsed_s', 'gear_calc', 'cruise_on', 'event', ...meta.cols.map(c => `${c.label} (${c.unit})`)];
+    const q = v => (v == null ? '' : /[",\n]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v));
+    const lines = [head.map(q).join(',')];
+    for (const r of rows) {
+      const [t, gear, cruise, ev, ...vals] = r;
+      lines.push([stamp(new Date(t)), ((t - meta.start) / 1000).toFixed(2), gear == null ? '' : gear, cruise, ev, ...vals].map(q).join(','));
+    }
+    return lines.join('\r\n') + '\r\n';
+  },
+  fileName(meta) { const d = new Date(meta.start); return `DriveLog_${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${meta.demo ? '_demo' : ''}.csv`; },
+  stats(meta, rows) {
+    const ci = k => meta.cols.findIndex(c => c.k === k) + 4;
+    const col = k => { const i = ci(k); return i < 4 ? [] : rows.map(r => r[i]).filter(v => v != null); };
+    const sp = col('0D'), rpm = col('0C'), cool = col('05'), bat = col('RV');
+    let dist = 0;
+    const iS = ci('0D');
+    if (iS >= 4) for (let i = 1; i < rows.length; i++) { const v = rows[i][iS], dt = (rows[i][0] - rows[i - 1][0]) / 3600000; if (v != null && dt < 0.01) dist += v * dt; }
+    const max = a => a.length ? Math.max(...a) : null, min = a => a.length ? Math.min(...a) : null;
+    const moving = sp.filter(v => v > 3);
+    return { dur: meta.end - meta.start, dist, maxSpeed: max(sp), avgSpeed: moving.length ? moving.reduce((a, b) => a + b, 0) / moving.length : null,
+      maxRpm: max(rpm), maxCool: max(cool), minBat: min(bat), rate: rows.length / Math.max(1, (meta.end - meta.start) / 1000) };
+  },
+  // Finds the rpm-per-mph factor that best explains the drive's steady points across all gears.
+  learn(meta, rows) {
+    const iR = meta.cols.findIndex(c => c.k === '0C') + 4, iS = meta.cols.findIndex(c => c.k === '0D') + 4;
+    if (iR < 4 || iS < 4) return null;
+    const toMph = meta.units === 'metric' ? 0.621371 : 1;
+    const r = [];
+    for (const row of rows) { const rpm = row[iR], sp = row[iS] == null ? null : row[iS] * toMph; if (rpm != null && sp != null && sp >= 12 && rpm > 600) r.push(rpm / sp); }
+    if (r.length < 60) return { error: 'Not enough driving in this log (need at least a minute of moving at 12+ mph).' };
+    const gears = S.gears;
+    let best = null;
+    for (let K = 15; K <= 80; K += 0.1) {
+      let hit = 0;
+      for (const x of r) for (const g of gears) { if (Math.abs(x - K * g) / (K * g) <= 0.04) { hit++; break; } }
+      if (!best || hit > best.hit) best = { K: +K.toFixed(1), hit };
+    }
+    // refine
+    for (let K = best.K - 0.1; K <= best.K + 0.1; K += 0.01) {
+      let hit = 0; for (const x of r) for (const g of gears) { if (Math.abs(x - K * g) / (K * g) <= 0.04) { hit++; break; } }
+      if (hit > best.hit) best = { K: +K.toFixed(2), hit };
+    }
+    best.share = best.hit / r.length; best.samples = r.length; best.ratios = r;
+    return best;
+  }
+};
+
+/* =====================================================================
+   Trouble codes
+   ===================================================================== */
+const CODE_TEXT = {
+  P0101: 'Mass air flow sensor range/performance', P0102: 'Mass air flow sensor low', P0103: 'Mass air flow sensor high', P0106: 'MAP sensor range/performance',
+  P0107: 'MAP sensor low', P0108: 'MAP sensor high', P0112: 'Intake air temp sensor low', P0113: 'Intake air temp sensor high', P0117: 'Coolant temp sensor low',
+  P0118: 'Coolant temp sensor high', P0121: 'Throttle position sensor range/performance', P0122: 'Throttle position sensor low', P0123: 'Throttle position sensor high',
+  P0125: 'Coolant takes too long to warm up', P0128: 'Thermostat (coolant below expected temp)', P0131: 'O2 sensor B1S1 low voltage', P0132: 'O2 sensor B1S1 high voltage',
+  P0133: 'O2 sensor B1S1 slow response', P0134: 'O2 sensor B1S1 no activity', P0135: 'O2 sensor B1S1 heater', P0137: 'O2 sensor B1S2 low voltage',
+  P0138: 'O2 sensor B1S2 high voltage', P0140: 'O2 sensor B1S2 no activity', P0141: 'O2 sensor B1S2 heater', P0171: 'System too lean (bank 1)', P0172: 'System too rich (bank 1)',
+  P0174: 'System too lean (bank 2)', P0175: 'System too rich (bank 2)', P0300: 'Random/multiple cylinder misfire', P0301: 'Cylinder 1 misfire', P0302: 'Cylinder 2 misfire',
+  P0303: 'Cylinder 3 misfire', P0304: 'Cylinder 4 misfire', P0305: 'Cylinder 5 misfire', P0306: 'Cylinder 6 misfire', P0325: 'Knock sensor circuit', P0335: 'Crankshaft position sensor',
+  P0340: 'Camshaft position sensor', P0401: 'EGR flow insufficient', P0420: 'Catalytic converter efficiency below threshold (bank 1)', P0430: 'Catalytic converter efficiency (bank 2)',
+  P0440: 'Evap system', P0441: 'Evap incorrect purge flow', P0442: 'Evap small leak', P0446: 'Evap vent control', P0449: 'Evap vent solenoid', P0455: 'Evap large leak (often a loose gas cap)',
+  P0456: 'Evap very small leak', P0496: 'Evap flow during non-purge', P0500: 'Vehicle speed sensor', P0502: 'Vehicle speed sensor low input', P0506: 'Idle speed lower than expected',
+  P0507: 'Idle speed higher than expected', P0562: 'System voltage low', P0563: 'System voltage high', P0700: 'Transmission control system (check transmission codes)',
+  P0705: 'Transmission range sensor', P0711: 'Transmission fluid temp sensor range', P0716: 'Transmission input speed sensor', P0717: 'Transmission input speed sensor no signal',
+  P0722: 'Transmission output speed sensor no signal', P0730: 'Incorrect gear ratio', P0740: 'Torque converter clutch circuit', P0741: 'Torque converter clutch stuck off / slipping',
+  P0742: 'Torque converter clutch stuck on', P0751: 'Shift solenoid A performance', P0756: 'Shift solenoid B performance', P0785: 'Shift timing solenoid', P0894: 'Transmission component slipping',
+  P1101: 'Intake air flow system performance (GM)', P1133: 'O2 sensor B1S1 insufficient switching (GM)', P1870: 'Transmission component slipping (GM)', P2135: 'Throttle position sensors disagree',
+  P2138: 'Accelerator pedal sensors disagree'
+};
+function parseCodes(resp, mode) {
+  const want = (parseInt(mode, 16) + 0x40).toString(16).toUpperCase();
+  const can = /CAN/i.test(Conn.protoName);
+  let hex = '';
+  for (let line of resp.split('\n')) {
+    line = line.replace(/\s/g, '').toUpperCase();
+    if (!/^[0-9A-F:]+$/.test(line)) continue;
+    if (can) { if (/^[0-9A-F]{3}$/.test(line)) continue; line = line.replace(/^[0-9A-F]:/, ''); hex += line; }
+    else if (line.startsWith(want)) hex += line.slice(2);
+  }
+  if (can) { const i = hex.indexOf(want); hex = i >= 0 ? hex.slice(i + 4) : ''; }
+  const codes = [];
+  for (let i = 0; i + 3 < hex.length; i += 4) {
+    const a = parseInt(hex.substr(i, 2), 16), b = parseInt(hex.substr(i + 2, 2), 16);
+    if (!a && !b) continue;
+    const code = 'PCBU'[a >> 6] + ((a >> 4) & 3) + (a & 15).toString(16).toUpperCase() + pad(b.toString(16).toUpperCase());
+    if (!codes.includes(code)) codes.push(code);
+  }
+  return codes;
+}
+async function readCodes() {
+  if (Conn.state !== 'on') return toast('Connect first');
+  $('codesOut').innerHTML = '<span class="dim">Reading…</span>';
+  Conn.polling = false; await sleep(400);
+  const stored = parseCodes(await Elm.send('03', 5000), '03');
+  const pending = parseCodes(await Elm.send('07', 5000), '07');
+  Conn.poll();
+  const item = c => `<div class="code"><b>${c}</b><span>${esc(CODE_TEXT[c] || 'Look this code up for your truck')}</span></div>`;
+  $('codesOut').innerHTML =
+    `<div style="margin-bottom:6px"><b>Stored</b> (check-engine light)</div>${stored.length ? stored.map(item).join('') : '<div class="dim small">None</div>'}` +
+    `<div style="margin:12px 0 6px"><b>Pending</b></div>${pending.length ? pending.map(item).join('') : '<div class="dim small">None</div>'}`;
+  Log.info('Codes stored=' + stored.join(',') + ' pending=' + pending.join(','));
+}
+function clearCodes() {
+  if (Conn.state !== 'on') return toast('Connect first');
+  popup('Clear trouble codes?', `<p>This turns off the check-engine light and also resets the emissions readiness monitors (the truck needs some driving before it can pass an inspection again).</p><p class="dim small">Do this with the engine off and the ignition on. If the problem is still there, the code will come back.</p>`,
+    [['Cancel'], ['Clear codes', async () => {
+      Conn.polling = false; await sleep(400);
+      const r = await Elm.send('04', 5000); Conn.poll();
+      toast(/44/.test(r.replace(/\s/g, '')) ? 'Codes cleared' : 'The truck did not confirm: ' + r);
+      $('codesOut').innerHTML = '<span class="dim">Cleared. Tap Read codes to check.</span>';
+    }, 'danger']]);
+}
+
+/* =====================================================================
+   Charts (plain canvas)
+   ===================================================================== */
+const COLORS = ['#7fb2ff', '#ffb86b', '#7ee0a1'];
+function setupCanvas(cv) {
+  const dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.height_css || (cv.height_css = cv.height);
+  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); cv.style.height = h + 'px';
+  const g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); return { g, w, h };
+}
+/* series: [{name, color, pts:[[t,v],...]}], events: [{t,text}] */
+function drawChart(cv, series, t0, t1, events) {
+  const { g, w, h } = setupCanvas(cv);
+  g.clearRect(0, 0, w, h);
+  const L = 6, R = w - 6, T = 8, B = h - 18;
+  g.strokeStyle = '#2e3542'; g.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) { const y = T + (B - T) * i / 4; g.beginPath(); g.moveTo(L, y); g.lineTo(R, y); g.stroke(); }
+  const X = t => L + (R - L) * (t - t0) / Math.max(1, t1 - t0);
+  for (const e of events || []) {
+    if (e.t < t0 || e.t > t1) continue;
+    g.strokeStyle = /Downshift/.test(e.text) ? '#ffb86b' : /flare/.test(e.text) ? '#ff6b6b' : '#5a6578';
+    g.setLineDash([3, 3]); g.beginPath(); g.moveTo(X(e.t), T); g.lineTo(X(e.t), B); g.stroke(); g.setLineDash([]);
+  }
+  series.forEach((s, si) => {
+    const vals = s.pts.map(p => p[1]).filter(v => v != null);
+    if (!vals.length) return;
+    let lo = Math.min(...vals), hi = Math.max(...vals);
+    if (hi - lo < 1e-6) { hi += 1; lo -= 1; }
+    const padv = (hi - lo) * 0.08; lo -= padv; hi += padv;
+    const Y = v => B - (B - T) * (v - lo) / (hi - lo);
+    g.strokeStyle = s.color; g.lineWidth = 2; g.beginPath();
+    let started = false;
+    for (const [t, v] of s.pts) { if (v == null) { started = false; continue; } const x = X(t), y = Y(v); if (!started) { g.moveTo(x, y); started = true; } else g.lineTo(x, y); }
+    g.stroke();
+  });
+  // range labels (min–max of each line) along the bottom
+  let x = L + 2; g.font = '11px system-ui'; g.textAlign = 'left';
+  series.forEach(s => {
+    const vals = s.pts.map(p => p[1]).filter(v => v != null); if (!vals.length) return;
+    const txt = `${s.name} ${fmtNum(Math.min(...vals), s.d)}–${fmtNum(Math.max(...vals), s.d)}`;
+    g.fillStyle = s.color; g.fillText(txt, x, h - 4); x += g.measureText(txt).width + 12;
+  });
+}
+function fmtNum(v, d) { return v == null || !isFinite(v) ? '–' : (+v).toFixed(d == null ? 0 : d); }
+function drawHistogram(cv, ratios, K, gears) {
+  const { g, w, h } = setupCanvas(cv);
+  g.clearRect(0, 0, w, h);
+  const lo = 10, hi = Math.max(150, K * gears[0] * 1.15), bins = Math.round((hi - lo) / 1.5);
+  const cnt = new Array(bins).fill(0);
+  for (const r of ratios) { const i = Math.floor((r - lo) / (hi - lo) * bins); if (i >= 0 && i < bins) cnt[i]++; }
+  const mx = Math.max(1, ...cnt), L = 6, R = w - 6, T = 16, B = h - 18, bw = (R - L) / bins;
+  const X = v => L + (R - L) * (v - lo) / (hi - lo);
+  g.font = '11px system-ui'; g.textAlign = 'center';
+  // expected gear positions first (dashed), bars on top so they stay visible
+  gears.forEach((gr, i) => { const x = X(K * gr); g.strokeStyle = 'rgba(255,184,107,.7)'; g.setLineDash([3, 3]); g.beginPath(); g.moveTo(x, T); g.lineTo(x, B); g.stroke(); g.setLineDash([]); g.fillStyle = '#ffb86b'; g.fillText(String(i + 1), x, T - 4); });
+  g.fillStyle = '#7fb2ff';
+  cnt.forEach((c, i) => { if (!c) return; const bh = Math.max(2, (B - T) * c / mx); g.fillRect(L + i * bw, B - bh, Math.max(2, bw - 0.5), bh); });
+  g.fillStyle = '#9aa4b8'; g.textAlign = 'left'; g.fillText(lo + ' rpm per mph', L, h - 4); g.textAlign = 'right'; g.fillText(Math.round(hi) + '', R, h - 4);
+}
+
+/* =====================================================================
+   UI rendering
+   ===================================================================== */
+let page = 'live', openDrive = null;
+function go(p) {
+  page = p;
+  document.querySelectorAll('.page').forEach(x => x.classList.toggle('on', x.id === 'p-' + p));
+  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.p === p));
+  if (p === 'drives') { openDrive = null; render.drives(); }
+  if (p === 'settings') render.settings();
+  if (p === 'live') render.liveChart();
+  $('main') && ($('main').scrollTop = 0);
+}
+document.querySelector('main').id = 'main';
+
+function popup(title, html, buttons) {
+  const box = $('modalBox');
+  box.innerHTML = `<h2>${esc(title)}</h2><div>${html}</div><div class="row" style="justify-content:flex-end;margin-top:12px" id="modalBtns"></div>`;
+  (buttons || [['OK']]).forEach(([label, fn, cls]) => {
+    const b = document.createElement('button'); b.textContent = label; if (cls) b.className = cls; else if (label !== 'Cancel') b.className = 'pri';
+    b.onclick = () => { closeModal(); fn && fn(); }; $('modalBtns').appendChild(b);
+  });
+  $('modal').classList.add('on');
+}
+function closeModal() { $('modal').classList.remove('on'); }
+$('modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
+
+window.onBack = () => {
+  if ($('modal').classList.contains('on')) { closeModal(); return true; }
+  if (page === 'drives' && openDrive) { openDrive = null; render.drives(); return true; }
+  if (page !== 'live') { go('live'); return true; }
+  return false;
+};
+
+const render = {
+  conn() {
+    const st = Conn.state;
+    $('connBtn').textContent = st === 'off' ? 'Connect' : st === 'on' ? 'Disconnect' : 'Cancel';
+    $('connBtn').className = st === 'off' ? 'pri' : '';
+    $('recBtn').textContent = Rec.on ? '■ Stop' : '● Record';
+    $('recBtn').classList.toggle('rec', Rec.on);
+    $('cruiseBtn').textContent = 'Cruise: ' + (Live.cruise ? 'ON' : 'off');
+    $('cruiseBtn').classList.toggle('on', Live.cruise);
+    const on = st === 'on';
+    $('liveEmpty').style.display = on ? 'none' : '';
+    $('liveChartCard').style.display = on ? '' : 'none';
+    $('liveEvCard').style.display = on || Live.events.length ? '' : 'none';
+    if (!on) $('tiles').innerHTML = '';
+  },
+  tiles() {
+    const { fast, slow } = Conn.plan();
+    const pids = [...fast, ...slow];
+    let html = `<div class="tile wide" id="tile-GEAR"><div class="lab">Gear (calculated)</div><div class="val" id="v-GEAR">–</div><div class="mm" id="mm-GEAR">RPM ÷ speed</div></div>`;
+    for (const p of pids) {
+      const ci = S.chart.indexOf(p);
+      html += `<div class="tile${ci >= 0 ? ' sel' : ''}" data-pid="${p}" style="${ci >= 0 ? '--c:' + COLORS[ci] : ''}">${ci >= 0 ? '<span class="dot"></span>' : ''}<div class="lab">${esc(PIDS[p].s)}</div><div class="val"><span id="v-${p}">–</span><small>${esc(unitOf(p))}</small></div><div class="mm" id="mm-${p}"></div></div>`;
+    }
+    $('tiles').innerHTML = html;
+    $('tiles').querySelectorAll('.tile[data-pid]').forEach(t => t.onclick = () => {
+      const p = t.dataset.pid, i = S.chart.indexOf(p);
+      if (i >= 0) S.chart.splice(i, 1); else { if (S.chart.length >= 3) S.chart.shift(); S.chart.push(p); }
+      saveSettings(); render.tiles(); render.liveChart();
+    });
+    render.liveChart();
+  },
+  liveValues(s) {
+    for (const p in s.disp) {
+      const el = $('v-' + p); if (!el) continue;
+      el.textContent = fmtNum(s.disp[p], PIDS[p].d);
+      const mm = $('mm-' + p); if (mm && Live.min[p] != null) mm.textContent = `min ${fmtNum(Live.min[p], PIDS[p].d)} · max ${fmtNum(Live.max[p], PIDS[p].d)}`;
+    }
+    const gv = $('v-GEAR');
+    if (gv) {
+      gv.textContent = s.gear ? s.gear : (s.mph != null && s.mph < 8 ? 'stopped' : '–');
+      const sl = s.slip;
+      $('mm-GEAR').textContent = s.gear && sl != null ? (sl > 0.04 ? `converter likely unlocked (+${Math.round(sl * 100)}%)` : 'converter likely locked') + (Rec.on ? ' · recording' : '') : (s.mph != null && s.mph >= 8 ? 'between gears / no match' : 'RPM ÷ speed');
+    }
+    if (page === 'live') render.liveChart();
+  },
+  liveChart() {
+    if (Conn.state !== 'on' || page !== 'live') return;
+    const now = Date.now(), t0 = now - 120000;
+    const series = S.chart.filter(p => PIDS[p]).map((p, i) => ({ name: PIDS[p].s, color: COLORS[i], d: PIDS[p].d, pts: Live.hist.map(h => [h.t, h.disp[p]]) }));
+    drawChart($('liveChart'), series, t0, now, Live.events);
+    $('liveLegend').innerHTML = series.map(s => `<span><i style="background:${s.color}"></i>${esc(s.name)}</span>`).join('');
+  },
+  liveEvents() {
+    $('liveEvCard').style.display = '';
+    $('liveEvents').innerHTML = Live.events.length ? Live.events.slice(0, 8).map(e => `<li><span class="t">${new Date(e.t).toTimeString().slice(0, 8)}</span><span class="${evClass(e.text)}">${esc(e.text)}</span></li>`).join('') : '<li class="dim">Nothing yet. Downshifts, RPM flares and throttle jumps show up here.</li>';
+  },
+  drives() {
+    if (openDrive) return render.driveDetail(openDrive);
+    $('driveDetail').style.display = 'none'; $('drivesList').style.display = '';
+    const list = Drives.list();
+    if (!list.length) { $('drivesList').innerHTML = '<div class="card empty">No drives yet.<br>Connect and tap <b>● Record</b> on the Live tab.</div>'; return; }
+    $('drivesList').innerHTML = '<div class="card">' + list.map(m => {
+      const d = new Date(m.start);
+      return `<div class="drive" data-id="${m.id}"><div><div>${d.toLocaleDateString()} ${d.toTimeString().slice(0, 5)}${m.demo ? ' <span class="dim small">(demo)</span>' : ''}${!m.done && !(Rec.meta && Rec.meta.id === m.id) ? ' <span class="dim small">(app closed while recording)</span>' : ''}</div><div class="small dim">${fmtDur(m.end - m.start)} · ${m.rows} rows · ${m.events.length} events</div></div><span class="dim">›</span></div>`;
+    }).join('') + '</div>';
+    $('drivesList').querySelectorAll('.drive').forEach(el => el.onclick = () => { openDrive = el.dataset.id; render.drives(); $('main').scrollTop = 0; });
+  },
+  driveDetail(id) {
+    const meta = Drives.list().find(m => m.id === id);
+    if (!meta) { openDrive = null; return render.drives(); }
+    const rows = Drives.rows(id), st = Drives.stats(meta, rows);
+    const spU = meta.units === 'metric' ? 'km/h' : 'mph', dU = meta.units === 'metric' ? 'km' : 'mi', tU = meta.units === 'metric' ? '°C' : '°F';
+    const d = new Date(meta.start);
+    const chartKeys = (meta.chart || S.chart).filter(k => meta.cols.some(c => c.k === k));
+    meta._chart = chartKeys.length ? chartKeys : meta.cols.slice(0, 3).map(c => c.k);
+    $('drivesList').style.display = 'none';
+    const el = $('driveDetail'); el.style.display = '';
+    el.innerHTML = `
+      <div class="row sp" style="margin-bottom:10px"><button id="ddBack">‹ Drives</button><span class="dim small">${d.toLocaleDateString()} ${d.toTimeString().slice(0, 5)}${meta.demo ? ' (demo)' : ''}</span></div>
+      <div class="card"><div class="stats">
+        <div><b>${fmtDur(st.dur)}</b><span>duration</span></div>
+        <div><b>${fmtNum(st.dist, 1)}</b><span>${dU}</span></div>
+        <div><b>${fmtNum(st.avgSpeed, 0)}</b><span>avg ${spU} moving</span></div>
+        <div><b>${fmtNum(st.maxSpeed, 0)}</b><span>max ${spU}</span></div>
+        <div><b>${fmtNum(st.maxRpm, 0)}</b><span>max rpm</span></div>
+        <div><b>${fmtNum(st.maxCool, 0)}</b><span>max coolant ${tU}</span></div>
+        <div><b>${fmtNum(st.minBat, 1)}</b><span>min battery V</span></div>
+        <div><b>${meta.events.length}</b><span>events</span></div>
+        <div><b>${fmtNum(st.rate, 1)}</b><span>rows / sec</span></div>
+      </div>
+      <div class="row" style="margin-top:10px"><button class="pri" id="ddShare">Share CSV</button><button id="ddSave">Save to Downloads</button><button class="danger" id="ddDel">Delete</button></div></div>
+      <div class="card"><h3>Chart</h3><div class="chips" id="ddChips"></div><canvas id="ddChart" height="210"></canvas></div>
+      <div class="card"><h3>Events</h3><ul class="evlist">${meta.events.length ? meta.events.map(e => `<li><span class="t">${fmtClock(e.t - meta.start)}</span><span class="${evClass(e.text)}">${esc(e.text)}</span></li>`).join('') : '<li class="dim">No events in this drive.</li>'}</ul></div>
+      <div class="card"><h3>Gears</h3><div class="small dim">Each bar is how often the truck ran at that RPM-per-mph. Tall bars are gears; the dashed lines are where DriveLog expects each gear right now. If they don't line up, tap Learn.</div>
+        <canvas id="ddHist" height="140" style="margin-top:8px"></canvas><div id="ddLearnOut" class="small" style="margin-top:8px"></div>
+        <div class="row" style="margin-top:8px"><button id="ddLearn">Learn gears from this drive</button></div></div>`;
+    const drawDD = () => {
+      const series = meta._chart.map((k, i) => { const ci = meta.cols.findIndex(c => c.k === k) + 4; return { name: meta.cols[ci - 4].label, color: COLORS[i], d: PIDS[k] ? PIDS[k].d : 1, pts: rows.map(r => [r[0], r[ci]]) }; });
+      drawChart($('ddChart'), series, meta.start, Math.max(meta.end, meta.start + 1000), meta.events);
+      $('ddChips').innerHTML = meta.cols.map(c => { const i = meta._chart.indexOf(c.k); return `<span class="chip${i >= 0 ? ' on' : ''}" data-k="${c.k}" style="${i >= 0 ? '--c:' + COLORS[i] : ''}">${esc(c.label)}</span>`; }).join('');
+      $('ddChips').querySelectorAll('.chip').forEach(ch => ch.onclick = () => {
+        const k = ch.dataset.k, i = meta._chart.indexOf(k);
+        if (i >= 0) meta._chart.splice(i, 1); else { if (meta._chart.length >= 3) meta._chart.shift(); meta._chart.push(k); }
+        drawDD();
+      });
+    };
+    drawDD();
+    const iR = meta.cols.findIndex(c => c.k === '0C') + 4, iS = meta.cols.findIndex(c => c.k === '0D') + 4, toMph = meta.units === 'metric' ? 0.621371 : 1;
+    const ratios = iR >= 4 && iS >= 4 ? rows.filter(r => r[iR] != null && r[iS] != null && r[iS] * toMph >= 12).map(r => r[iR] / (r[iS] * toMph)) : [];
+    if (ratios.length) drawHistogram($('ddHist'), ratios, kFactor(), S.gears); else $('ddHist').style.display = 'none';
+    $('ddBack').onclick = () => { openDrive = null; render.drives(); };
+    $('ddShare').onclick = () => exportDrive(meta, rows, true);
+    $('ddSave').onclick = () => exportDrive(meta, rows, false);
+    $('ddDel').onclick = () => popup('Delete this drive?', '<p>This can\'t be undone. Export it first if you want to keep a copy.</p>', [['Cancel'], ['Delete', () => { Drives.del(id); openDrive = null; render.drives(); toast('Deleted'); }, 'danger']]);
+    $('ddLearn').onclick = () => {
+      $('ddLearnOut').textContent = 'Working…';
+      setTimeout(() => {
+        const res = Drives.learn(meta, rows);
+        if (!res) { $('ddLearnOut').textContent = 'This drive has no RPM and speed columns.'; return; }
+        if (res.error) { $('ddLearnOut').textContent = res.error; return; }
+        const axle = res.K * S.tire / 336.13;
+        const okShare = res.share >= 0.6;
+        $('ddLearnOut').innerHTML = `Best fit: <b>${res.K} rpm per mph</b> in a 1:1 gear, matching ${Math.round(res.share * 100)}% of ${res.samples} moving readings.` +
+          ` With ${S.tire}" tires that's about a <b>${axle.toFixed(2)}</b> axle ratio.` + (okShare ? '' : '<br><span style="color:var(--orange)">Low match: the gear ratios in Settings may not fit this truck, or the drive had lots of shifting.</span>');
+        drawHistogram($('ddHist'), res.ratios, res.K, S.gears);
+        const b = document.createElement('button'); b.className = 'pri'; b.textContent = 'Use this'; b.style.marginLeft = '8px';
+        b.onclick = () => { S.kLearned = res.K; saveSettings(); toast('Gear calculation updated'); render.driveDetail(id); };
+        $('ddLearn').after(b);
+      }, 30);
+    };
+  },
+  settings() {
+    render.devices();
+    $('protoSel').value = S.proto;
+    $('setScreen').checked = S.screen; $('setUnits').value = S.units; $('setFast').checked = S.fast; $('setDebug').checked = S.debug;
+    $('setGears').value = S.gears.join(', '); $('setAxle').value = S.axle; $('setTire').value = S.tire;
+    $('setRpmJump').value = S.rpmJump; $('setTpsJump').value = S.tpsJump;
+    render.kVal(); render.pidList();
+    $('verVal').textContent = VERSION + (NATIVE ? '' : ' (browser preview)');
+  },
+  kVal() { $('kVal').textContent = kFactor().toFixed(1) + (S.kLearned ? ' (learned)' : ''); },
+  devices() {
+    let devs = [];
+    if (NATIVE) {
+      const st = JSON.parse(AndroidDL.btStatus() || '{}');
+      if (!st.permission) {
+        $('devList').innerHTML = '<div class="hint" style="margin:0 0 8px">DriveLog needs permission to see your paired Bluetooth devices.</div><button class="pri" id="permBtn">Allow Bluetooth</button>' + demoRow();
+        $('permBtn').onclick = () => { DLNative.onPermission = () => render.devices(); AndroidDL.requestBtPermission(); };
+        bindDev(); return;
+      }
+      devs = JSON.parse(AndroidDL.pairedDevices() || '[]');
+    }
+    const likely = d => /obd|elm|veepeak|vlink|vgate|obdlink|scan|kiwi|v-link|ios-vlink/i.test(d.name);
+    devs.sort((a, b) => likely(b) - likely(a));
+    $('devList').innerHTML = (NATIVE ? (devs.length ? devs.map(d => `<div class="dev${S.device === d.address ? ' sel' : ''}" data-a="${esc(d.address)}" data-n="${esc(d.name)}"><div>${esc(d.name)}${likely(d) ? ' <span class="small" style="color:var(--green)">looks like an OBD adapter</span>' : ''}<div class="small dim">${esc(d.address)}</div></div>${S.device === d.address ? '✓' : ''}</div>`).join('') : '<div class="dim small" style="margin-bottom:8px">No paired devices. Pair the adapter in Bluetooth settings first.</div>') : '<div class="dim small" style="margin-bottom:8px">Bluetooth works in the Android app. In this preview only the demo truck is available.</div>') + demoRow();
+    bindDev();
+    function demoRow() { return `<div class="dev${S.device === 'demo' || !NATIVE ? ' sel' : ''}" data-a="demo" data-n="Demo truck"><div>Demo truck<div class="small dim">Simulated 2005 Colorado, for trying the app</div></div>${S.device === 'demo' || !NATIVE ? '✓' : ''}</div>`; }
+    function bindDev() { $('devList').querySelectorAll('.dev').forEach(el => el.onclick = () => { if (Conn.state !== 'off') return toast('Disconnect first'); S.device = el.dataset.a; S.deviceName = el.dataset.n; saveSettings(); render.devices(); }); }
+  },
+  pidList() {
+    const known = Conn.supported.size > 0;
+    $('pidList').innerHTML = PID_ORDER.map(p => {
+      const sup = !known || Conn.supported.has(p);
+      const m = pidMode(p);
+      return `<div class="pidrow${sup ? '' : ' uns'}"><span>${esc(PIDS[p].n)} <span class="dim small">${esc(unitOf(p))}</span></span><select data-p="${p}"><option value="fast"${m === 'fast' ? ' selected' : ''}>Fast</option><option value="normal"${m === 'normal' ? ' selected' : ''}>Normal</option><option value="off"${m === 'off' ? ' selected' : ''}>Off</option></select></div>`;
+    }).join('');
+    $('pidList').querySelectorAll('select').forEach(sel => sel.onchange = () => {
+      S.pidMode[sel.dataset.p] = sel.value; saveSettings();
+      if (Rec.on) toast('Changes apply to the next recording');
+      if (Conn.state === 'on') render.tiles();
+    });
+  },
+  truckInfo() {
+    if (Conn.state !== 'on') return;
+    const sup = [...Conn.supported].filter(p => PIDS[p] && !PIDS[p].adapter).map(p => PIDS[p].s);
+    const unknown = [...Conn.supported].filter(p => !PIDS[p] && !['20', '40', '60'].includes(p));
+    $('truckInfo').innerHTML = `<div>Adapter: <b>${esc(Conn.elmVersion || '?')}</b></div><div>Protocol: <b>${esc(Conn.protoName || '?')}</b></div><div style="margin-top:6px">The truck reports ${sup.length} of DriveLog's sensors: ${esc(sup.join(', '))}.</div>${unknown.length ? `<div class="dim small" style="margin-top:4px">Also reports PIDs DriveLog doesn't show yet: ${unknown.join(', ')}</div>` : ''}`;
+  }
+};
+function evClass(t) { return /Downshift/.test(t) ? 'ev-down' : /flare/.test(t) ? 'ev-flare' : /^Marked/.test(t) ? 'ev-mark' : /Throttle/.test(t) ? 'ev-thr' : ''; }
+
+function exportDrive(meta, rows, share) {
+  const csv = Drives.csv(meta, rows), name = Drives.fileName(meta);
+  if (NATIVE) {
+    const r = share ? AndroidDL.shareFile(name, 'text/csv', csv) : AndroidDL.saveFile(name, 'text/csv', csv);
+    if (r.startsWith('ERROR')) { Log.err('export: ' + r); toast('Export failed: ' + r.slice(7)); }
+    else if (!share) toast('Saved to ' + r, 4000);
+    Log.info('Exported ' + name + ' (' + rows.length + ' rows)');
+  } else {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    toast('Downloaded ' + name);
+  }
+}
+
+/* =====================================================================
+   Updates (Android app only): compares the build number with version.txt in the GitHub release
+   ===================================================================== */
+const Upd = {
+  latest: null,
+  check(manual) {
+    if (!NATIVE) { if (manual) toast('Updates work in the Android app'); return; }
+    $('updText').textContent = 'Checking…';
+    DLNative.onUpdateInfo = (txt, err) => {
+      S.lastUpdCheck = Date.now(); saveSettings();
+      const v = parseInt(txt, 10);
+      if (err || !v) { $('updText').textContent = 'Could not check' + (err ? ': ' + err : ''); if (manual) toast('Could not check for updates'); return; }
+      this.latest = v;
+      if (v > VCODE) {
+        $('updText').textContent = `Version 1.0.${v} is available`;
+        $('updBtn').textContent = 'Install 1.0.' + v; $('updBtn').className = 'pri'; $('updBtn').onclick = () => this.install();
+        const b = $('updBanner'); b.style.display = ''; b.innerHTML = `<span>DriveLog 1.0.${v} is available.</span><button class="pri" id="updBannerBtn">Update</button>`; $('updBannerBtn').onclick = () => this.install();
+      } else { $('updText').textContent = 'You have the latest version'; if (manual) toast('You have the latest version'); }
+    };
+    AndroidDL.checkUpdate();
+  },
+  install() {
+    if (Rec.on) return toast('Stop recording first');
+    DLNative.onUpdateProgress = (st, msg) => {
+      if (st === 'permission') toast('Allow DriveLog to install apps, then tap Update again', 5000);
+      else if (st === 'downloading') toast('Downloading update…', 4000);
+      else if (st === 'installing') toast('Opening the installer…');
+      else if (st === 'error') { toast('Update failed: ' + msg); Log.err('update: ' + msg); }
+    };
+    AndroidDL.installUpdate();
+  }
+};
+
+/* =====================================================================
+   Wiring
+   ===================================================================== */
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => go(b.dataset.p));
+$('connBtn').onclick = () => Conn.state === 'off' ? Conn.start() : Conn.stop('');
+$('recBtn').onclick = () => Rec.on ? Rec.stop() : Rec.start();
+$('markBtn').onclick = () => Live.mark();
+$('cruiseBtn').onclick = () => {
+  Live.cruise = !Live.cruise; render.conn();
+  if (Conn.state === 'on') {
+    const s = Live.sample();
+    Live.addEvent(Live.cruise ? 'Cruise set ON (by you)' : 'Cruise set off (by you)', s.t);
+    if (Rec.on) Rec.add(s, Live.events[0].text);
+  }
+};
+$('readCodesBtn').onclick = readCodes;
+$('clearCodesBtn').onclick = clearCodes;
+$('refreshDevBtn').onclick = () => render.devices();
+$('btSettingsBtn').onclick = () => NATIVE ? AndroidDL.openBtSettings() : toast('Opens Bluetooth settings in the Android app');
+$('protoSel').onchange = e => { S.proto = e.target.value; saveSettings(); if (Conn.state !== 'off') toast('Reconnect to use the new protocol'); };
+$('setScreen').onchange = e => { S.screen = e.target.checked; saveSettings(); };
+$('setUnits').onchange = e => { S.units = e.target.value; saveSettings(); Live.min = {}; Live.max = {}; Live.hist = []; if (Conn.state === 'on') render.tiles(); render.pidList(); };
+$('setFast').onchange = e => { S.fast = e.target.checked; Conn.fastOk = true; saveSettings(); };
+$('setDebug').onchange = e => { S.debug = e.target.checked; saveSettings(); if (S.debug) Log.info('Debug log on, app ' + VERSION); };
+$('setGears').onchange = e => {
+  const g = e.target.value.split(/[,\s]+/).map(Number).filter(x => x > 0.3 && x < 8);
+  if (g.length >= 2) { S.gears = g; saveSettings(); toast('Gear ratios saved'); } else { toast('Enter at least two ratios, like 3.06, 1.63, 1.00, 0.70'); e.target.value = S.gears.join(', '); }
+};
+const numSet = (id, key, lo, hi, resetK) => $(id).onchange = e => {
+  const v = parseFloat(e.target.value);
+  if (v >= lo && v <= hi) { S[key] = v; if (resetK) S.kLearned = null; saveSettings(); render.kVal(); } else { toast(`Enter a number from ${lo} to ${hi}`); e.target.value = S[key]; }
+};
+numSet('setAxle', 'axle', 2, 7, true); numSet('setTire', 'tire', 20, 45, true); numSet('setRpmJump', 'rpmJump', 150, 3000); numSet('setTpsJump', 'tpsJump', 3, 80);
+$('updBtn').onclick = () => Upd.check(true);
+$('viewLogBtn').onclick = () => {
+  const lines = Log.all();
+  const report = `DriveLog ${VERSION} (${NATIVE ? 'Android' : 'browser'}) ${new Date().toString()}\nUA: ${navigator.userAgent}\nAdapter: ${S.deviceName || S.device || '-'} proto ${S.proto} fast ${S.fast}\nConn: ${Conn.state} ${Conn.protoName} ${Conn.elmVersion}\nSupported: ${[...Conn.supported].join(',')}\n---\n` + lines.join('\n');
+  popup('Debug log', `<div class="small dim" style="margin-bottom:6px">${lines.length} lines${S.debug ? '' : ' (debug log is off: only warnings and errors are kept)'}</div><pre id="logPre">${esc(lines.slice(-300).join('\n')) || '(empty)'}</pre>`,
+    [['Clear', () => { Log.clear(); toast('Log cleared'); }, 'danger'], ['Copy report', () => {
+      if (NATIVE) AndroidDL.copyText(report);
+      else if (navigator.clipboard) navigator.clipboard.writeText(report).catch(() => {});
+      toast('Copied. Paste it into a message to Claude.');
+    }], ['Close']]);
+};
+
+// a drive left open by a crash or the app being closed: mark it done
+setTimeout(() => {
+  for (const m of Drives.list()) if (!m.done) { m.done = true; m.interrupted = true; Store.write(m.id + '.json', JSON.stringify(m), false); }
+}, 50);
+render.conn(); render.liveEvents(); $('liveEvCard').style.display = 'none';
+if (!NATIVE && !S.device) S.device = 'demo';
+if (NATIVE && Date.now() - (S.lastUpdCheck || 0) > 6 * 3600 * 1000) setTimeout(() => Upd.check(false), 1500);
+window.addEventListener('resize', () => { render.liveChart(); });
+Log.info('Started ' + VERSION + (NATIVE ? ' android' : ' browser'));
+</script>
+</body>
+</html>
