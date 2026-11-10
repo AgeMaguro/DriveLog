@@ -69,6 +69,7 @@ nav button.on { color:var(--acc); box-shadow: inset 0 2px 0 var(--acc); }
 @keyframes pulse { 50% { filter:brightness(1.25); } }
 #cruiseBtn.on { background:#1d3a2a; color:var(--green); }
 .tiles { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:12px; }
+[data-info] { -webkit-touch-callout:none; -webkit-user-select:none; user-select:none; }
 .tile { background:var(--card); border-radius:12px; padding:9px 11px; position:relative; border:1px solid transparent; }
 .tile.sel { border-color:var(--c, var(--acc)); }
 .tile .lab { font-size:12px; color:var(--dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding-right:12px; }
@@ -346,6 +347,189 @@ const PIDS = {
   '21': { n: 'Distance with check-engine light on', s: 'MIL dist', k: 'dist', d: 0, f: a => a[0] * 256 + a[1] },
   'RV': { n: 'Battery voltage (from adapter)', s: 'Battery', u: 'V', d: 1, adapter: true }
 };
+
+/* Long-press explanations (hold a tile on Live or a sensor name in Settings). what / why / typical / watch.
+   Typical values are general rules of thumb for a warm gasoline engine, not specs for one truck. */
+const PID_INFO = {
+  '0C': { what: 'How fast the crankshaft is turning, in revolutions per minute.',
+    why: 'The most basic engine reading. DriveLog divides it by speed to work out which gear you are in, and watches it for RPM flares and downshifts.',
+    typical: 'Warm idle roughly 600-800 rpm. Highway cruise about 1,800-2,500 in top gear. Redline is usually near 5,500-6,000 for this kind of engine.',
+    watch: 'Idle that hunts up and down (vacuum leak, dirty throttle body, EGR or idle control trouble). RPM that jumps while speed stays flat, which can mean a slipping transmission or a torque converter that is not locking.' },
+  '0D': { what: 'Vehicle speed as the computer sees it, from the speed sensor on the transmission output.',
+    why: 'Together with RPM it gives the calculated gear. Event detection also uses it to tell a real downshift (speed steady, RPM jumps) from simply speeding up.',
+    typical: 'Should match your speedometer within a few percent, and a GPS app a little more closely. Bigger or smaller tires than stock make both readings drift.',
+    watch: 'Speed that jumps or drops to zero while moving (failing speed sensor or wiring). A steady offset from GPS means the tire size or axle ratio setting needs correcting (axle ratio and tire size in Settings).' },
+  '11': { what: 'How far open the throttle plate is, as an absolute percentage of its mechanical travel.',
+    why: 'Shows what the engine is actually getting when you ask for power. Compare it with the pedal to spot hesitation.',
+    typical: 'Many vehicles read about 10-20% with the throttle closed because this value is not zeroed. Wide open is near 100%. Relative throttle zeroes the closed position.',
+    watch: 'Throttle that lags well behind the pedal or the commanded value, a jerky or stepped reading, or a big difference between this and Throttle B. A dirty throttle body often gives a rough low-throttle response.' },
+  '04': { what: 'Calculated engine load: how much air each cylinder is taking in compared with the most it could hold.',
+    why: 'A quick measure of how hard the engine is working. It rises with throttle, a hill, or towing, and it helps explain RPM, fuel trims and timing.',
+    typical: 'Roughly 15-30% at idle, 20-45% steady cruise, 80-100% flat out.',
+    watch: 'Higher than normal load at idle or light throttle (restricted exhaust, dragging brakes, transmission drag). Very low load while you are pushing the pedal (air intake restriction, throttle not opening).' },
+  '49': { what: 'Accelerator pedal position: how far your foot has pushed the pedal.',
+    why: 'On a drive-by-wire truck the computer decides how far to open the throttle based on this. The gap between Pedal and Throttle shows what the computer did with your request.',
+    typical: '0% foot off, 100% floored. Should rise smoothly and match your movement.',
+    watch: 'Pedal that steps or drops out (worn pedal sensor, a classic cause of hesitation). Pedal moving but Throttle not following (throttle body or limp mode).' },
+  '4C': { what: 'The throttle opening the computer is asking for.',
+    why: 'Compare it with the real Throttle reading. If they disagree, the throttle body is not doing what it was told.',
+    typical: 'Should track the real throttle position closely, with a small lag.',
+    watch: 'A persistent gap, or the commanded value stuck low while Pedal is high (computer holding power back, often with a reduced-power warning).' },
+  '05': { what: 'Engine coolant temperature.',
+    why: 'The computer uses it to set the fuel mixture and timing, when to enter closed loop, and when to run the cooling fans. Cold engines run richer on purpose.',
+    typical: 'Fully warm is about 190-220 F (88-104 C), steady. It takes several minutes of driving to get there.',
+    watch: 'Over about 230 F (110 C) means overheating, so stop. Never reaching about 180 F (82 C) on a drive points to a thermostat stuck open, which also hurts mileage and cabin heat. A sensor that jumps around gives odd fuel trims.' },
+  '0F': { what: 'Temperature of the air going into the engine.',
+    why: 'Hot air is thinner, so the computer pulls fuel and timing to match. Very hot intake air costs power.',
+    typical: 'Near outside temperature on a cold start, then about 20-50 F (10-30 C) above outside once the engine bay is warm.',
+    watch: 'Readings far above outside temperature at highway speed (hot air being drawn in). A reading of -40 F or a stuck number suggests a faulty sensor or connector.' },
+  '0B': { what: 'Absolute air pressure inside the intake manifold.',
+    why: 'Tells the computer how much air the engine is pulling, which is the basis for fueling. It is also a good vacuum gauge.',
+    typical: 'Key on, engine off: about the same as outside pressure (near 100 kPa / 14.5 psi at sea level). Warm idle roughly 30-45 kPa (about 17-21 inHg of vacuum). Near outside pressure at full throttle.',
+    watch: 'Idle pressure that is too high (vacuum leak, late cam timing, clogged exhaust). A reading that does not drop when the engine starts.' },
+  '10': { what: 'Mass air flow: the weight of air entering the engine per second, in grams per second.',
+    why: 'The computer\'s main input for how much fuel to add. A dirty or failing MAF throws off the mixture and shows up in fuel trims.',
+    typical: 'Roughly 3-7 g/s at idle for a 3-4 liter engine, 15-30 g/s at steady highway cruise, and 100+ g/s flat out. It should rise smoothly with RPM and throttle.',
+    watch: 'Low readings compared with similar drives (dirty or contaminated sensor, which pushes trims positive). Flat or erratic readings, or values that do not change with throttle.' },
+  '0E': { what: 'Ignition timing advance, in degrees before top dead center.',
+    why: 'Timing is how early the spark fires. The computer pulls it back (retards it) to stop engine knock, so drops here show it is protecting the engine.',
+    typical: 'About 10-20 degrees at idle, 25-40 at light-load cruise, lower under heavy load, hot weather or poor fuel.',
+    watch: 'Sudden drops of several degrees under load (knock retard: poor fuel, carbon, overheating, a lean condition). Timing stuck at one value (computer in a fallback mode).' },
+  '06': { what: 'Short-term fuel trim: the fast correction, in percent, the computer is adding to (+) or removing from (-) the base fuel amount to hold the ideal air-fuel ratio.',
+    why: 'One of the best health checks for the whole fuel and air system. It reacts within a second to what the O2 sensor says.',
+    typical: 'Swings quickly and averages near 0%. Staying within about +/-10% is normal.',
+    watch: 'Sitting positive (adding fuel) means the engine is running lean: vacuum leak, weak fuel pump or filter, dirty MAF, exhaust leak. Sitting negative means rich: leaking injector, high fuel pressure, stuck purge valve. Check the Drives tab: DriveLog averages trims for idle, cruise, accelerating and decelerating. A problem that only shows at idle points to a vacuum leak; one that shows at higher load points to fuel delivery or the MAF.' },
+  '07': { what: 'Long-term fuel trim: the slow, learned correction (in percent) that the computer has settled on over many minutes of driving.',
+    why: 'Short-term trim handles moment-to-moment changes; long-term trim remembers the steady error. Add them together for the total correction.',
+    typical: 'Within about +/-8% is healthy. It moves slowly and reads the same drive to drive.',
+    watch: 'Beyond about +/-10-15% (a fault code such as P0171 lean or P0172 rich often follows). Compare idle versus cruise numbers in Drives to localize the cause. Note that clearing codes resets it.' },
+  '08': { what: 'Short-term fuel trim for the second bank of cylinders.',
+    why: 'Only V-shaped engines have a second bank. Comparing the banks shows whether a problem is on one side or the whole engine.',
+    typical: 'Same as bank 1: near 0%, within about +/-10%.',
+    watch: 'One bank far from the other points to a local problem on that side. An inline engine only has bank 1, so this may not appear at all.' },
+  '09': { what: 'Long-term fuel trim for the second bank of cylinders.',
+    why: 'The learned correction for bank 2. Compared with bank 1 it tells you if the issue is one side or both.',
+    typical: 'Within about +/-8%.',
+    watch: 'Big differences between banks. An inline engine only has bank 1, so this may not be available.' },
+  '14': { what: 'Voltage from the oxygen sensor in front of the catalytic converter (bank 1, sensor 1).',
+    why: 'This is the sensor that tells the computer whether the engine is rich or lean. It drives the short-term fuel trim.',
+    typical: 'Once warm, it flips between about 0.1 V (lean) and 0.9 V (rich) a few times a second. It averages around 0.45 V.',
+    watch: 'Stuck near 0.45 V (sensor dead or unplugged), stuck high or low (running very rich or lean, or a bad sensor), or slow, lazy swings (an aging sensor, which can trigger codes like P0133).' },
+  '15': { what: 'Voltage from the oxygen sensor after the catalytic converter (bank 1, sensor 2).',
+    why: 'It checks the catalytic converter. A working converter smooths out the exhaust, so this reading should be steadier than the front sensor.',
+    typical: 'Fairly steady around 0.5-0.7 V with slow movement once warm.',
+    watch: 'A rear sensor that swings as fast and as much as the front one means the catalytic converter is not working well (code P0420). A reading stuck at one value can mean a bad sensor.' },
+  '0A': { what: 'Fuel rail pressure.',
+    why: 'Low fuel pressure causes lean conditions, hesitation and hard starting. Many vehicles do not report it.',
+    typical: 'Port-injected gasoline engines typically run about 45-65 psi (310-450 kPa), dipping slightly under hard acceleration.',
+    watch: 'Pressure that falls off under load (weak pump, clogged filter, failing regulator).' },
+  '2F': { what: 'Fuel tank level as a percentage.',
+    why: 'Handy for a log of range and consumption, and it helps explain rough running on a nearly empty tank.',
+    typical: 'Reads from full to empty, but fuel gauges are never perfectly linear and slosh around while driving.',
+    watch: 'Readings that jump about by large amounts or do not match the dash gauge (sender problem).' },
+  '33': { what: 'Barometric (outdoor air) pressure.',
+    why: 'The computer uses it to adjust fueling and timing for altitude and weather.',
+    typical: 'About 101 kPa (14.7 psi) at sea level, dropping roughly 3.5 kPa (0.5 psi) for each 1,000 ft you climb.',
+    watch: 'A value that does not match your altitude (suggests a bad MAP or barometric sensor).' },
+  '42': { what: 'Control module voltage: the supply voltage the engine computer sees.',
+    why: 'A direct check on the charging system. Low or high voltage makes sensors read wrong and can set odd codes.',
+    typical: 'Engine running: about 13.5-14.7 V. Engine off: about 12.4-12.8 V.',
+    watch: 'Below about 13 V while running (weak alternator or loose belt or connection), above about 15 V (overcharging). Compare with the Battery reading from the adapter; a difference points to a voltage drop in the wiring.' },
+  '43': { what: 'Absolute load value: the amount of air per intake stroke compared with what a full cylinder could hold at standard conditions.',
+    why: 'Another way to see how hard the engine is working, not adjusted for altitude the way Engine load is.',
+    typical: 'About 20-35% at idle and 80-100% or more at full throttle on an engine without a turbo.',
+    watch: 'Values that are unusually high at idle or low under throttle (same meaning as Engine load).' },
+  '44': { what: 'Commanded air-fuel ratio as lambda. 1.00 is the ideal ratio for gasoline (about 14.7 parts air to 1 part fuel).',
+    why: 'Shows what mixture the computer is aiming for. Below 1 is richer, above 1 is leaner.',
+    typical: 'About 1.00 while cruising or idling warm. 0.80-0.90 when it deliberately enriches (cold start, hard acceleration).',
+    watch: 'Stuck away from 1.00 when warm and steady (computer in open loop, perhaps because the O2 sensor or coolant sensor is bad).' },
+  '45': { what: 'Throttle position measured from the closed position, so 0% means fully closed.',
+    why: 'A cleaner view of throttle than the absolute number, which does not read 0% when closed.',
+    typical: '0% at rest and about 70-100% flat out.',
+    watch: 'A reading that does not return to 0% (sticking throttle or a dirty throttle body).' },
+  '46': { what: 'Outside (ambient) air temperature.',
+    why: 'Used for calculations and handy to put drive logs in context (cold start, hot day).',
+    typical: 'Should be close to the real air temperature.',
+    watch: 'Heat soak after parking in the sun or on hot pavement makes it read high until you drive for a while.' },
+  '47': { what: 'The second throttle position sensor (sensor B).',
+    why: 'Drive-by-wire throttles have two sensors that read independently so the computer can catch a failure.',
+    typical: 'Should follow Throttle position closely, though it may be scaled differently.',
+    watch: 'The two disagreeing (codes such as P0121 or P2135 and a reduced-power mode).' },
+  '4A': { what: 'Another of the accelerator pedal\'s redundant position sensors (sensor E).',
+    why: 'Pedals carry two or three sensors so the computer can detect a bad one.',
+    typical: 'Should track the main Pedal reading.',
+    watch: 'Disagreeing with Pedal, a dropout, or a jerky reading as you press.' },
+  '2C': { what: 'How far the computer is commanding the EGR valve open, as a percentage.',
+    why: 'EGR feeds some exhaust back into the intake to cool combustion and cut emissions.',
+    typical: '0% at idle and at full throttle. Some opening during steady light-load cruise.',
+    watch: 'Rough idle or pinging when it opens, often a sticky or clogged EGR valve.' },
+  '2E': { what: 'Commanded evaporative purge: how much the computer is drawing fuel vapor from the charcoal canister into the engine.',
+    why: 'Purge adds extra fuel to the intake, so you may see fuel trims shift when it turns on.',
+    typical: 'Zero when cold or idling, opening up at steady driving once the engine is warm.',
+    watch: 'Rough idle or hard starting after refueling can come from a purge valve stuck open.' },
+  '3C': { what: 'Catalytic converter temperature (bank 1, upstream).',
+    why: 'The converter only works when it is hot, and a failing or overloaded one runs hotter than normal.',
+    typical: 'Roughly 400-800 C (750-1,470 F) at cruise. It needs about 300 C to start working.',
+    watch: 'Over about 900 C (1,650 F) or climbing quickly (misfire dumping raw fuel into the exhaust). Very low readings when warm.' },
+  '5C': { what: 'Engine oil temperature.',
+    why: 'Oil protects the engine only within a temperature window. It warms more slowly than coolant.',
+    typical: 'Roughly 200-250 F (95-120 C) when fully warm.',
+    watch: 'Over about 260 F (125 C) when towing or in hot weather, or oil that never warms up on short trips.' },
+  '1F': { what: 'Seconds since the engine started.',
+    why: 'Handy for context in a log (cold start or hot restart), and for how long the engine took to warm up.',
+    typical: 'Counts up from zero every time you start the engine.',
+    watch: 'A counter that resets mid-drive means the engine stalled or the computer restarted.' },
+  '21': { what: 'Distance driven since the check-engine light came on.',
+    why: 'Tells you how long a problem has existed. It resets when codes are cleared.',
+    typical: 'Zero if the light is off.',
+    watch: 'A small number after you thought the light was off means the codes were recently cleared, so the emissions monitors may not be ready for an inspection yet.' },
+  'RV': { what: 'Battery voltage measured by the OBD2 adapter at the diagnostic port.',
+    why: 'A quick check of the battery and alternator. It reads independently of the engine computer.',
+    typical: 'Engine off: about 12.4-12.8 V (12.6 is full). Cranking: dips but stays above about 9.6 V. Running: about 13.5-14.7 V.',
+    watch: 'Below 13 V when running (alternator or belt), above 15 V (overcharge), or dropping a lot when you turn things on. A big gap from ECU volts means a voltage drop in the wiring.' },
+  'GEAR': { what: 'The gear the transmission is probably in, worked out by DriveLog from RPM divided by speed and compared with your gear ratios.',
+    why: 'OBD2 does not report the gear, so this estimate is how DriveLog spots downshifts, RPM flares and possible slip.',
+    typical: 'The converter text under it says whether the torque converter looks locked (RPM close to the gear ratio) or unlocked (RPM several percent higher).',
+    watch: 'No match at speed ("between gears") while RPM is high and speed is flat: that is the pattern of a slipping clutch pack or band. If the gear is often wrong, check your axle ratio and tire size in Settings, or use "Learn gears from this drive".' }
+};
+function showPidInfo(key) {
+  const info = PID_INFO[key], P = PIDS[key];
+  if (!info) return;
+  const title = key === 'GEAR' ? 'Gear (calculated)' : P.n;
+  let live = '';
+  if (key === 'GEAR') {
+    const last = Live.hist[Live.hist.length - 1];
+    if (Conn.state === 'on' && last) live = last.gear ? `Right now: gear ${last.gear}` : 'Right now: no gear match';
+  } else if (Conn.state === 'on' && Live.raw[key] != null) {
+    const v = toDisp(key, Live.raw[key]), mm = Live.min[key] != null ? ` (this session: min ${fmtNum(Live.min[key], P.d)}, max ${fmtNum(Live.max[key], P.d)})` : '';
+    live = `Right now: ${fmtNum(v, P.d)} ${unitOf(key)}${mm}`;
+  }
+  const code = key === 'GEAR' ? 'Calculated by DriveLog' : key === 'RV' ? 'Read by the adapter (command ATRV)' : `OBD2 mode 01, PID ${key} · unit: ${unitOf(key) || '-'}`;
+  const sec = (h, t) => `<div style="margin-top:9px"><b>${h}</b><div class="small" style="color:var(--text)">${esc(t)}</div></div>`;
+  popup(title, `<div style="max-height:62vh;overflow:auto">
+    <div class="small dim">${esc(code)}</div>
+    ${live ? `<div style="margin-top:6px;color:var(--green)">${esc(live)}</div>` : ''}
+    ${sec('What it is', info.what)}${sec('Why it matters', info.why)}${sec('Typical values', info.typical)}${sec('What to watch for', info.watch)}
+  </div>`, [['Close']]);
+}
+/* Hold a sensor (tile on Live, or its name in Settings) for half a second to read about it. */
+(function () {
+  const SEL = '[data-info]';
+  let timer = 0, sx = 0, sy = 0, fired = false, swallowUntil = 0;
+  const cancel = () => { clearTimeout(timer); timer = 0; };
+  document.addEventListener('pointerdown', e => {
+    fired = false; cancel();
+    const el = e.target.closest && e.target.closest(SEL);
+    if (!el) return;
+    sx = e.clientX; sy = e.clientY;
+    timer = setTimeout(() => { timer = 0; fired = true; try { navigator.vibrate && navigator.vibrate(15); } catch (_) {} showPidInfo(el.dataset.info); }, 500);
+  });
+  document.addEventListener('pointermove', e => { if (timer && Math.hypot(e.clientX - sx, e.clientY - sy) > 10) cancel(); });
+  document.addEventListener('pointerup', () => { cancel(); if (fired) { swallowUntil = Date.now() + 500; fired = false; } });
+  document.addEventListener('pointercancel', () => { cancel(); fired = false; });
+  document.addEventListener('click', e => { if (Date.now() < swallowUntil) { swallowUntil = 0; e.stopPropagation(); e.preventDefault(); } }, true);   // the release after a long press must not also toggle the chart line
+  document.addEventListener('contextmenu', e => { if (e.target.closest && e.target.closest(SEL)) e.preventDefault(); });
+})();
 const PID_ORDER = Object.keys(PIDS);
 const FAST_DEFAULT = ['0C', '0D', '11', '04', '49', '4C'];
 const UNITS = {
@@ -1208,11 +1392,12 @@ const render = {
   tiles() {
     const { fast, slow } = Conn.plan();
     const pids = [...fast, ...slow];
-    let html = `<div class="tile wide" id="tile-GEAR"><div class="lab">Gear (calculated)</div><div class="val" id="v-GEAR">–</div><div class="mm" id="mm-GEAR">RPM ÷ speed</div></div>`;
+    let html = `<div class="tile wide" id="tile-GEAR" data-info="GEAR"><div class="lab">Gear (calculated)</div><div class="val" id="v-GEAR">–</div><div class="mm" id="mm-GEAR">RPM ÷ speed</div></div>`;
     for (const p of pids) {
       const ci = S.chart.indexOf(p);
-      html += `<div class="tile${ci >= 0 ? ' sel' : ''}" data-pid="${p}" style="${ci >= 0 ? '--c:' + COLORS[ci] : ''}">${ci >= 0 ? '<span class="dot"></span>' : ''}<div class="lab">${esc(PIDS[p].s)}</div><div class="val"><span id="v-${p}">–</span><small>${esc(unitOf(p))}</small></div><div class="mm" id="mm-${p}"></div></div>`;
+      html += `<div class="tile${ci >= 0 ? ' sel' : ''}" data-pid="${p}" data-info="${p}" style="${ci >= 0 ? '--c:' + COLORS[ci] : ''}">${ci >= 0 ? '<span class="dot"></span>' : ''}<div class="lab">${esc(PIDS[p].s)}</div><div class="val"><span id="v-${p}">–</span><small>${esc(unitOf(p))}</small></div><div class="mm" id="mm-${p}"></div></div>`;
     }
+    html += '<div class="dim small" style="grid-column:span 2;text-align:center;padding:2px 0">Tap a sensor to chart it. Hold one to learn what it means.</div>';
     $('tiles').innerHTML = html;
     $('tiles').querySelectorAll('.tile[data-pid]').forEach(t => t.onclick = () => {
       const p = t.dataset.pid, i = S.chart.indexOf(p);
@@ -1468,7 +1653,7 @@ const render = {
     $('pidList').innerHTML = PID_ORDER.map(p => {
       const sup = !known || Conn.supported.has(p);
       const m = pidMode(p);
-      return `<div class="pidrow${sup ? '' : ' uns'}"><span>${esc(PIDS[p].n)} <span class="dim small">${esc(unitOf(p))}</span></span><select data-p="${p}"><option value="fast"${m === 'fast' ? ' selected' : ''}>Fast</option><option value="normal"${m === 'normal' ? ' selected' : ''}>Normal</option><option value="off"${m === 'off' ? ' selected' : ''}>Off</option></select></div>`;
+      return `<div class="pidrow${sup ? '' : ' uns'}"><span data-info="${p}">${esc(PIDS[p].n)} <span class="dim small">${esc(unitOf(p))}</span></span><select data-p="${p}"><option value="fast"${m === 'fast' ? ' selected' : ''}>Fast</option><option value="normal"${m === 'normal' ? ' selected' : ''}>Normal</option><option value="off"${m === 'off' ? ' selected' : ''}>Off</option></select></div>`;
     }).join('');
     $('pidList').querySelectorAll('select').forEach(sel => sel.onchange = () => {
       S.pidMode[sel.dataset.p] = sel.value; saveSettings();

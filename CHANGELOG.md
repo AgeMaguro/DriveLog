@@ -1,5 +1,8 @@
 # DriveLog changelog
 
+## 1.0.5 (2026-11-09)
+- **Sensor explainers:** hold any sensor tile on the Live tab (or a sensor's name in Settings) for half a second to read what it is, why it matters, typical values, and what to watch for, plus its current reading and this session's min/max. Covers every sensor DriveLog can show, and the calculated gear. A short tap still charts the sensor.
+
 ## 1.0.4 (2026-11-09)
 - **Background logging:** DriveLog can now connect, record and save drives with the app closed and the screen off. The logging engine moved out of the web page into a native Android foreground service (an ongoing "DriveLog" notification shows while it runs, with Mark and Stop buttons). Settings > Automatic > "Keep logging in the background" turns it off (then logging only happens while the app is open, like before).
 - It starts by itself when you open the app (or after the phone restarts or the app updates) if an adapter is chosen and Connect automatically is on. While waiting for the adapter it wakes the phone about once a minute to try; once connected it holds the phone awake so readings don't drop. Pressing Stop in the notification (or Disconnect in the app) pauses it until you open the app or tap Connect.

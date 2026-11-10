@@ -9,6 +9,7 @@ On your phone, open **https://github.com/AgeMaguro/DriveLog/releases/download/dr
 
 ## What it does
 - **Live** tab: tiles for every sensor the vehicle reports (RPM, speed, throttle, pedal, load, temps, fuel trims, O2 sensors, MAF, timing, battery voltage...), a 2-minute chart, and a calculated **gear** (RPM / speed).
+- **Hold** a sensor tile (or a sensor's name in Settings) to learn what it is, why it matters and what normal looks like. A tap charts it.
 - **Record** saves a drive. **Mark** drops a flag when you feel something (tap it afterwards to label it: Hesitation, Surge, Stumble...). **Cruise** lets you note when cruise control is on (OBD2 can't see it).
 - **Automatic** (Settings): connects by itself when it finds your adapter, starts recording when the engine is running, and saves the drive when RPM has read zero for 20 s (changeable). Stopping by hand pauses auto-record until the engine has been turned off.
 - **Background logging** (Settings > Keep logging in the background, on by default): a foreground service with a notification keeps the connection and recording going with the app closed and the screen off, and starts again after a phone restart.
