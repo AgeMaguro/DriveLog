@@ -6,7 +6,6 @@ import android.app.DownloadManager;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
-import android.bluetooth.BluetoothSocket;
 import android.content.BroadcastReceiver;
 import android.content.ClipData;
 import android.content.ClipboardManager;
@@ -42,7 +41,6 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.PrintWriter;
@@ -52,7 +50,6 @@ import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.Set;
-import java.util.UUID;
 import java.util.regex.Pattern;
 
 /**
@@ -67,15 +64,14 @@ public class MainActivity extends Activity {
     private static final String TAG = "DriveLog";
     private static final String PREFS = "drivelog_debug";
     private static final String HOME = "file:///android_asset/";
-    private static final UUID SPP = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
     private static final String RELEASE = "https://github.com/AgeMaguro/DriveLog/releases/download/drivelog-latest/";
     private static final int REQ_BT = 41;
+    private static final int REQ_NOTIF = 42;
     private static final Pattern SAFE_NAME = Pattern.compile("[A-Za-z0-9_.-]{1,80}");
 
     private WebView web;
-    private final Object btLock = new Object();
-    private volatile BluetoothSocket socket;
-    private volatile OutputStream btOut;
+    private EngineHost host;
+    private final EngineHost.Ui uiSink = this::js;
     private long downloadId = -1;
     private BroadcastReceiver dlReceiver;
 
@@ -83,6 +79,9 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         installCrashSaver();
+        host = EngineHost.get(this);
+        host.activityAlive = true;
+        host.ensureStarted();
 
         int bg = Color.rgb(0x12, 0x14, 0x18);
         getWindow().setStatusBarColor(bg);
@@ -132,7 +131,8 @@ public class MainActivity extends Activity {
 
     /** Runs a line of JavaScript in the page (from any thread). */
     private void js(final String code) {
-        runOnUiThread(() -> { if (web != null) web.evaluateJavascript(code, null); });
+        final String safe = code.replace(String.valueOf((char) 0x2028), "\\u2028").replace(String.valueOf((char) 0x2029), "\\u2029");
+        runOnUiThread(() -> { if (web != null) web.evaluateJavascript(safe, null); });
     }
 
     private static String q(String s) { return JSONObject.quote(s == null ? "" : s); }
@@ -160,74 +160,26 @@ public class MainActivity extends Activity {
 
     // ---------------------------------------------------------------- Bluetooth
 
-    private void doConnect(String address) {
-        closeSocket(null, false);
-        js("DLNative.onState('connecting','')");
-        try {
-            BluetoothAdapter ad = btAdapter();
-            if (ad == null) throw new IOException("This phone has no Bluetooth");
-            if (!ad.isEnabled()) throw new IOException("Bluetooth is turned off");
-            if (!hasBtPermission()) throw new IOException("Bluetooth permission not granted");
-            BluetoothDevice dev = ad.getRemoteDevice(address);
-            try { ad.cancelDiscovery(); } catch (SecurityException ignored) { }
-
-            BluetoothSocket sock = null;
-            Exception last = null;
-            for (int attempt = 0; attempt < 3 && sock == null; attempt++) {
-                BluetoothSocket c = null;
-                try {
-                    if (attempt == 0) c = dev.createRfcommSocketToServiceRecord(SPP);
-                    else if (attempt == 1) c = dev.createInsecureRfcommSocketToServiceRecord(SPP);
-                    else c = (BluetoothSocket) dev.getClass().getMethod("createRfcommSocket", int.class).invoke(dev, 1);
-                    c.connect();
-                    sock = c;
-                } catch (Exception e) {
-                    last = e;
-                    Log.w(TAG, "Connect attempt " + attempt + " failed: " + e);
-                    if (c != null) try { c.close(); } catch (IOException ignored) { }
-                }
-            }
-            if (sock == null) throw new IOException(last == null ? "could not connect" : String.valueOf(last.getMessage()));
-
-            final BluetoothSocket mine = sock;
-            final InputStream in = sock.getInputStream();
-            synchronized (btLock) { socket = sock; btOut = sock.getOutputStream(); }
-            Thread reader = new Thread(() -> {
-                byte[] buf = new byte[1024];
-                try {
-                    while (true) {
-                        int n = in.read(buf);
-                        if (n < 0) break;
-                        String chunk = new String(buf, 0, n, StandardCharsets.ISO_8859_1);
-                        js("DLNative.onData(" + q(chunk) + ")");
-                    }
-                } catch (IOException ignored) { }
-                if (socket == mine) closeSocket("Connection to the adapter was lost", true);
-            }, "obd-reader");
-            reader.start();
-            js("DLNative.onState('connected','')");
-        } catch (SecurityException e) {
-            js("DLNative.onState('error'," + q("Bluetooth permission not granted") + ")");
-        } catch (Exception e) {
-            js("DLNative.onState('error'," + q(String.valueOf(e.getMessage())) + ")");
-        }
-    }
-
-    private void closeSocket(String reason, boolean notify) {
-        BluetoothSocket s;
-        synchronized (btLock) { s = socket; socket = null; btOut = null; }
-        if (s != null) {
-            try { s.close(); } catch (IOException ignored) { }
-            if (notify) js("DLNative.onState('disconnected'," + q(reason) + ")");
-        }
-    }
-
     @Override
     public void onRequestPermissionsResult(int code, String[] perms, int[] results) {
         if (code == REQ_BT) {
             boolean ok = results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED;
             js("DLNative.onPermission(" + ok + ")");
+            if (ok) askNotificationPermission();   // one permission dialog at a time
+            host.syncService();
+        } else if (code == REQ_NOTIF) {
+            host.syncService();
         }
+    }
+
+    /** Asks (once) for permission to show the "DriveLog is logging" notification. Logging works without it, but is easier to trust with it. */
+    private void askNotificationPermission() {
+        if (Build.VERSION.SDK_INT < 33) return;
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return;
+        SharedPreferences p = getSharedPreferences(PREFS, MODE_PRIVATE);
+        if (p.getBoolean("askedNotif", false)) return;
+        p.edit().putBoolean("askedNotif", true).apply();
+        requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQ_NOTIF);
     }
 
     // ---------------------------------------------------------------- export
@@ -327,16 +279,41 @@ public class MainActivity extends Activity {
             return arr.toString();
         }
 
-        @JavascriptInterface public void connect(final String address) { new Thread(() -> doConnect(address), "obd-connect").start(); }
-
-        @JavascriptInterface public void write(String text) {
-            OutputStream o = btOut;
-            if (o == null) return;
-            try { o.write(text.getBytes(StandardCharsets.ISO_8859_1)); o.flush(); }
-            catch (IOException e) { closeSocket("Sending to the adapter failed", true); }
+        // --- the logging engine (runs in the background service; the page only shows it and sends commands)
+        @JavascriptInterface public void setConfig(String json) {
+            host.setConfig(json);
+            runOnUiThread(() -> { host.syncService(); });
         }
 
-        @JavascriptInterface public void disconnect() { closeSocket("", true); }
+        @JavascriptInterface public String engineSnapshot() { return host.engine.snapshotJson(); }
+
+        @JavascriptInterface public void engineConnect() {
+            host.engine.connectRequest();
+            if (host.engine.config().bg && !host.engine.config().demo() && host.hasBtPermission()) LogService.start(MainActivity.this);
+        }
+
+        @JavascriptInterface public void engineDisconnect() { host.engine.disconnectRequest(); }
+
+        @JavascriptInterface public void engineRecStart() { host.engine.recStartRequest(); }
+
+        @JavascriptInterface public void engineRecStop() { host.engine.recStopRequest(); }
+
+        @JavascriptInterface public void engineMark() { host.engine.markRequest(); }
+
+        @JavascriptInterface public void engineCruise() { host.engine.cruiseRequest(); }
+
+        @JavascriptInterface public void engineLabel(double t, String label) { host.engine.labelEvent((long) t, label); }
+
+        @JavascriptInterface public void engineQuery(int id, String cmdsJson, int timeoutMs) {
+            try {
+                JSONArray a = new JSONArray(cmdsJson);
+                java.util.ArrayList<String> cmds = new java.util.ArrayList<>();
+                for (int i = 0; i < a.length(); i++) cmds.add(a.getString(i));
+                host.engine.queryRequest(id, cmds, timeoutMs);
+            } catch (Exception e) { host.onQuery(id, "[]"); }
+        }
+
+        @JavascriptInterface public String engineLog() { return host.logText(); }
 
         @JavascriptInterface public void openBtSettings() {
             runOnUiThread(() -> {
@@ -486,15 +463,29 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        host.ensureStarted();
+        host.attach(uiSink);
+        if (host.hasBtPermission()) askNotificationPermission();
+        host.syncService();
+        js("window.DLNative && DLNative.resync && DLNative.resync()");   // the page asks the engine for what it missed
+    }
+
+    @Override
     protected void onPause() {
-        // Logging keeps running while the screen is on; this just saves anything buffered.
+        host.detach(uiSink);
+        // Logging itself runs in the service; this just saves anything the page has buffered.
         if (web != null) web.evaluateJavascript("window.saveNow && saveNow()", null);
         super.onPause();
     }
 
     @Override
     protected void onDestroy() {
-        closeSocket(null, false);
+        host.detach(uiSink);
+        host.activityAlive = false;
+        // Without the background service nothing keeps the engine useful once the screen is gone: stop it and save.
+        if (isFinishing() && !LogService.running) new Thread(host.engine::shutdown, "drivelog-shutdown").start();
         if (dlReceiver != null) { try { unregisterReceiver(dlReceiver); } catch (Exception ignored) { } dlReceiver = null; }
         if (web != null) { web.destroy(); web = null; }
         super.onDestroy();

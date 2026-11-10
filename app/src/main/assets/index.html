@@ -221,7 +221,8 @@ input.full { width:100%; }
 
     <div class="card">
       <h3>Automatic</h3>
-      <div class="setrow"><div class="l">Connect automatically<span class="small dim">While DriveLog is open, keeps looking for your adapter and connects as soon as the truck powers it.</span></div><label class="switch"><input type="checkbox" id="setAutoConn"><span></span></label></div>
+      <div class="setrow"><div class="l">Connect automatically<span class="small dim">Keeps looking for your adapter and connects as soon as the truck powers it (in the background too, if that is on below).</span></div><label class="switch"><input type="checkbox" id="setAutoConn"><span></span></label></div>
+      <div class="setrow"><div class="l">Keep logging in the background<span class="small dim">Lets DriveLog connect and record with the app closed and the screen off (an ongoing notification shows while it runs). Turn off to log only while DriveLog is open.</span></div><label class="switch"><input type="checkbox" id="setBg"><span></span></label></div>
       <div class="setrow"><div class="l">Record automatically<span class="small dim">Starts a recording when the engine is running and saves the drive after the engine has been off for the delay below. Stopping by hand pauses it until the engine has been turned off.</span></div><label class="switch"><input type="checkbox" id="setAutoRec"><span></span></label></div>
       <div class="setrow"><div class="l">Engine-off delay (seconds)<span class="small dim">How long RPM must read zero before the drive is saved.</span></div><input type="number" step="5" id="setAutoStop"></div>
       <div class="hint">DriveLog has to stay open (screen on) to log. Phone in a mount with the screen on works best.</div>
@@ -296,11 +297,14 @@ const DEFAULTS = {
   device: '', deviceName: '', proto: '2', units: 'us', fast: true, screen: true, debug: false,
   gears: [3.06, 1.63, 1.00, 0.70], axle: 3.73, tire: 30.0, kLearned: null,
   rpmJump: 500, tpsJump: 15, pidMode: {}, chart: ['0C', '0D', '11'], lastUpdCheck: 0,
-  autoConn: true, autoRec: true, autoStopSec: 20
+  autoConn: true, autoRec: true, autoStopSec: 20, bg: true
 };
 let S = Object.assign({}, DEFAULTS);
 try { Object.assign(S, JSON.parse(localStorage.getItem(SKEY) || '{}')); } catch (e) { Log.warn('settings unreadable, using defaults'); }
-function saveSettings() { try { localStorage.setItem(SKEY, JSON.stringify(S)); } catch (e) { Log.err('settings save failed'); } }
+function saveSettings() {
+  try { localStorage.setItem(SKEY, JSON.stringify(S)); } catch (e) { Log.err('settings save failed'); }
+  if (NATIVE) { try { AndroidDL.setConfig(JSON.stringify(S)); } catch (e) { Log.err('engine settings failed: ' + e); } }   // the background engine keeps its own copy
+}
 function kFactor() { return S.kLearned || (336.13 * S.axle / S.tire); }  // rpm per mph in a 1.00 gear
 
 /* =====================================================================
@@ -356,27 +360,10 @@ function pidMode(pid) {
 }
 
 /* =====================================================================
-   Transports: real Bluetooth (via Android bridge) or a simulated truck
+   The simulated truck (browser preview only; on Android the Java engine in the background service talks to the adapter)
    ===================================================================== */
-window.DLNative = { onData() {}, onState() {}, onPermission() {}, onUpdateInfo() {}, onUpdateProgress() {} };
-
-const NativeTransport = {
-  name: 'bt',
-  connect(address) {
-    return new Promise(resolve => {
-      DLNative.onState = (st, msg) => {
-        Log.info('BT state ' + st + (msg ? ': ' + msg : ''));
-        if (st === 'connected') resolve({ ok: true });
-        else if (st === 'error') resolve({ ok: false, msg });
-        else if (st === 'disconnected') Conn.lost(msg || 'Disconnected');
-      };
-      DLNative.onData = s => Elm.onData(s);
-      AndroidDL.connect(address);
-    });
-  },
-  write(s) { AndroidDL.write(s); },
-  close() { DLNative.onState = () => {}; AndroidDL.disconnect(); }
-};
+window.DLNative = { onData() {}, onState() {}, onPermission() {}, onUpdateInfo() {}, onUpdateProgress() {},
+  onEngineState() {}, onSample() {}, onEvent() {}, onNotice() {}, onQuery() {}, resync() {} };   // the Android engine pushes into these (see "Android engine mirror")
 
 /* A pretend ELM327 + 2005 Colorado: drives off, cruises at 65 and hits a hill every ~45 s where the
    "cruise control" kicks it down from 4th to 2nd. Lets you try everything before the adapter arrives. */
@@ -525,15 +512,10 @@ const Conn = {
   // auto = started by the auto-connect timer: failures are quiet (no popups, no prompts)
   async start(auto) {
     if (this.state !== 'off') return this.stop('');
-    const demo = S.device === 'demo' || !NATIVE;
-    if (!demo && !S.device) { if (!auto) { toast('Pick your adapter first'); go('settings'); } return; }
-    if (!demo) {
-      const st = JSON.parse(AndroidDL.btStatus() || '{}');
-      if (!st.permission) { if (auto) return; AndroidDL.requestBtPermission(); DLNative.onPermission = ok => { if (ok) this.start(); else toast('DriveLog needs the Nearby devices permission to use Bluetooth'); }; return; }
-      if (!st.enabled) { if (!auto) toast('Turn on Bluetooth first'); return; }
-    }
+    const demo = true;   // browser preview: the simulated truck (Android uses the Java engine)
+    if (!S.device) S.device = 'demo';
     this.state = 'connecting'; render.conn();
-    const tr = demo ? DemoTruck : NativeTransport;
+    const tr = DemoTruck;
     this.setStatus(demo ? 'Starting demo…' : auto ? 'Looking for adapter…' : 'Connecting to adapter…', 'busy');
     Log.info('Connecting via ' + tr.name + ' ' + (demo ? '' : S.device) + (auto ? ' (auto)' : ''));
     const r = await tr.connect(S.device);
@@ -1013,13 +995,28 @@ function parseCodes(resp, mode) {
   }
   return codes;
 }
+// Runs OBD commands outside the polling loop: the Java engine does it between polls on Android, the browser engine pauses its own.
+let qSeq = 0; const qWait = {};
+async function obdQuery(cmds, timeout) {
+  if (NATIVE) {
+    return new Promise(resolve => {
+      const id = ++qSeq;
+      qWait[id] = resolve;
+      AndroidDL.engineQuery(id, JSON.stringify(cmds), timeout);
+      setTimeout(() => { if (qWait[id]) { delete qWait[id]; resolve(cmds.map(() => 'TIMEOUT')); } }, timeout * cmds.length + 6000);
+    });
+  }
+  Conn.polling = false; await sleep(400);
+  const out = [];
+  for (const c of cmds) out.push(await Elm.send(c, timeout));
+  Conn.poll();
+  return out;
+}
 async function readCodes() {
   if (Conn.state !== 'on') return toast('Connect first');
   $('codesOut').innerHTML = '<span class="dim">Reading…</span>';
-  Conn.polling = false; await sleep(400);
-  const stored = parseCodes(await Elm.send('03', 5000), '03');
-  const pending = parseCodes(await Elm.send('07', 5000), '07');
-  Conn.poll();
+  const [rs, rp] = await obdQuery(['03', '07'], 5000);
+  const stored = parseCodes(rs, '03'), pending = parseCodes(rp, '07');
   const item = c => `<div class="code"><b>${c}</b><span>${esc(CODE_TEXT[c] || 'Look this code up for your truck')}</span></div>`;
   $('codesOut').innerHTML =
     `<div style="margin-bottom:6px"><b>Stored</b> (check-engine light)</div>${stored.length ? stored.map(item).join('') : '<div class="dim small">None</div>'}` +
@@ -1030,8 +1027,7 @@ function clearCodes() {
   if (Conn.state !== 'on') return toast('Connect first');
   popup('Clear trouble codes?', `<p>This turns off the check-engine light and also resets the emissions readiness monitors (the truck needs some driving before it can pass an inspection again).</p><p class="dim small">Do this with the engine off and the ignition on. If the problem is still there, the code will come back.</p>`,
     [['Cancel'], ['Clear codes', async () => {
-      Conn.polling = false; await sleep(400);
-      const r = await Elm.send('04', 5000); Conn.poll();
+      const [r] = await obdQuery(['04'], 5000);
       toast(/44/.test(r.replace(/\s/g, '')) ? 'Codes cleared' : 'The truck did not confirm: ' + r);
       $('codesOut').innerHTML = '<span class="dim">Cleared. Tap Read codes to check.</span>';
     }, 'danger']]);
@@ -1261,7 +1257,7 @@ const render = {
     $('liveEvCard').style.display = '';
     const ul = $('liveEvents'), list = Live.events.slice(0, 8);
     ul.innerHTML = list.length ? list.map((e, i) => `<li class="${/^Marked/.test(e.text) ? 'tap' : ''}" data-i="${i}"><span class="t">${new Date(e.t).toTimeString().slice(0, 8)}</span><span class="${evClass(e.text)}">${esc(e.text)}</span>${e.label ? `<span class="lbl">${esc(e.label)}</span>` : ''}</li>`).join('') : '<li class="dim">Nothing yet. Downshifts, RPM flares, throttle jumps and your marks show up here. Tap a mark to label it.</li>';
-    ul.querySelectorAll('li.tap').forEach(li => li.onclick = () => { const e = list[+li.dataset.i]; labelModal(e, () => { if (Rec.on) Rec.saveMeta(); render.liveEvents(); }); });
+    ul.querySelectorAll('li.tap').forEach(li => li.onclick = () => { const e = list[+li.dataset.i]; labelModal(e, () => { if (NATIVE) AndroidDL.engineLabel(e.t, e.label || ''); else if (Rec.on) Rec.saveMeta(); render.liveEvents(); }); });
   },
   drives() {
     if (openCmp) return render.compare();
@@ -1444,7 +1440,7 @@ const render = {
     $('setScreen').checked = S.screen; $('setUnits').value = S.units; $('setFast').checked = S.fast; $('setDebug').checked = S.debug;
     $('setGears').value = S.gears.join(', '); $('setAxle').value = S.axle; $('setTire').value = S.tire;
     $('setRpmJump').value = S.rpmJump; $('setTpsJump').value = S.tpsJump;
-    $('setAutoConn').checked = S.autoConn; $('setAutoRec').checked = S.autoRec; $('setAutoStop').value = S.autoStopSec;
+    $('setAutoConn').checked = S.autoConn; $('setBg').checked = S.bg !== false; $('setAutoRec').checked = S.autoRec; $('setAutoStop').value = S.autoStopSec;
     render.kVal(); render.pidList();
     $('verVal').textContent = VERSION + (NATIVE ? '' : ' (browser preview)');
   },
@@ -1536,13 +1532,96 @@ const Upd = {
 };
 
 /* =====================================================================
+   Android engine mirror. On Android the Java engine (running in a foreground service) owns the Bluetooth link,
+   polling, event detection and recording. This page only shows what it pushes and sends it commands.
+   ===================================================================== */
+Live.ingest = function (s, quiet) {   // s: {t, raw:{pid:value}, gear, slip}
+  this.raw = s.raw || {};
+  const disp = {};
+  for (const p in this.raw) disp[p] = toDisp(p, this.raw[p]);
+  const mph = this.raw['0D'] == null ? null : this.raw['0D'] * 0.621371;
+  const x = { t: s.t, disp, rpm: this.raw['0C'], mph, tps: this.raw['11'], gear: s.gear == null ? null : s.gear, slip: s.slip == null ? null : s.slip };
+  for (const p in disp) { const v = disp[p]; if (v == null) continue; if (!(this.min[p] <= v)) this.min[p] = v; if (!(this.max[p] >= v)) this.max[p] = v; }
+  this.hist.push(x);
+  while (this.hist.length && x.t - this.hist[0].t > 125000) this.hist.shift();
+  if (!quiet && x.t - this.lastUi > 250) { this.lastUi = x.t; render.liveValues(x); }
+  return x;
+};
+const Mirror = {
+  prevConn: 'off', screenOn: false,
+  apply(st) {
+    if (!st) return;
+    const prev = this.prevConn;
+    Conn.state = st.conn; Conn.supported = new Set(st.supported || []); Conn.protoName = st.proto || ''; Conn.elmVersion = st.elm || '';
+    Conn.setStatus(st.status || 'Not connected', st.cls || '');
+    const wasRec = Rec.on, r = st.rec || {};
+    Rec.on = !!r.on; Rec.engineSeen = !!r.engineSeen;
+    Rec.meta = Rec.on ? { id: r.id, auto: !!r.auto, start: r.start, rows: r.rows } : null;
+    Auto.suppressed = !!st.suppressed; AutoConn.userOff = !!st.userOff; Live.cruise = !!st.cruise;
+    const wantScreen = Rec.on && !!S.screen;
+    if (wantScreen !== this.screenOn) { this.screenOn = wantScreen; try { AndroidDL.keepScreenOn(wantScreen); } catch (e) {} }
+    this.prevConn = st.conn;
+    if (st.conn === 'on' && prev !== 'on') {   // just connected (or the page just opened on a connected truck)
+      render.conn(); render.tiles(); render.pidList(); render.truckInfo();
+    } else if (st.conn !== 'on' && prev === 'on') {
+      Live.hist = []; render.conn();
+    } else render.conn();
+    if (wasRec && !Rec.on) render.drives();
+  },
+  event(e) {
+    Live.events.unshift(e); Live.events = Live.events.slice(0, 30);
+    render.liveEvents();
+  },
+  snapshot() {
+    let snap;
+    try { snap = JSON.parse(AndroidDL.engineSnapshot() || '{}'); } catch (e) { Log.err('engine snapshot failed: ' + e); return; }
+    Live.events = snap.events || [];
+    Live.hist = []; Live.min = {}; Live.max = {};
+    for (const s of snap.hist || []) Live.ingest(s, true);
+    this.prevConn = 'resync';
+    this.apply(snap.state);
+    render.liveEvents();
+    if (snap.state && snap.state.conn !== 'on') $('liveEvCard').style.display = Live.events.length ? '' : 'none';
+  }
+};
+if (NATIVE) {
+  DLNative.onEngineState = st => Mirror.apply(st);
+  DLNative.onSample = s => Live.ingest(s);
+  DLNative.onEvent = e => Mirror.event(e);
+  DLNative.resync = () => Mirror.snapshot();
+  DLNative.onQuery = (id, arr) => { const f = qWait[id]; if (f) { delete qWait[id]; f(arr); } };
+  DLNative.onNotice = (kind, msg) => {
+    Log.info('Engine notice ' + kind + ': ' + msg);
+    if (kind === 'toast') toast(msg, 4000);
+    else if (kind === 'connect_failed') popup('Could not connect to the adapter', `<p>${esc(msg || 'Unknown error')}</p><p class="dim small">Check that the adapter is plugged in, the ignition is on, it's paired in your phone's Bluetooth settings, and no other app (like Car Scanner) is connected to it.</p>`);
+    else if (kind === 'truck_silent') popup('Adapter connected, but the truck didn\'t answer', `<p>The adapter said: <code>${esc(msg || 'nothing')}</code></p><p class="dim small">Turn the ignition to ON (or start the engine), check the adapter is pushed fully into the port, then connect again. If it still fails, try Protocol: Auto in Settings.</p>`);
+  };
+}
+
+/* =====================================================================
    Wiring
    ===================================================================== */
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => go(b.dataset.p));
-$('connBtn').onclick = () => { if (Conn.state === 'off') { AutoConn.userOff = false; AutoConn.fails = 0; AutoConn.nextAt = 0; Conn.start(); } else { AutoConn.userOff = true; Conn.stop(''); } };
-$('recBtn').onclick = () => { if (Rec.on) { Auto.suppressed = true; Rec.stop(); } else { Auto.suppressed = false; Rec.start(); } render.autoInfo(); };
-$('markBtn').onclick = () => Live.mark();
+$('connBtn').onclick = () => {
+  if (NATIVE) {
+    if (Conn.state !== 'off') return AndroidDL.engineDisconnect();
+    if (!S.device) { toast('Pick your adapter first'); return go('settings'); }
+    if (S.device !== 'demo') {
+      const st = JSON.parse(AndroidDL.btStatus() || '{}');
+      if (!st.permission) { DLNative.onPermission = ok => { if (ok) AndroidDL.engineConnect(); else toast('DriveLog needs the Nearby devices permission to use Bluetooth'); }; return AndroidDL.requestBtPermission(); }
+      if (!st.enabled) return toast('Turn on Bluetooth first');
+    }
+    return AndroidDL.engineConnect();
+  }
+  if (Conn.state === 'off') { AutoConn.userOff = false; AutoConn.fails = 0; AutoConn.nextAt = 0; Conn.start(); } else { AutoConn.userOff = true; Conn.stop(''); }
+};
+$('recBtn').onclick = () => {
+  if (NATIVE) { if (Conn.state !== 'on') return toast('Connect first'); return Rec.on ? AndroidDL.engineRecStop() : AndroidDL.engineRecStart(); }
+  if (Rec.on) { Auto.suppressed = true; Rec.stop(); } else { Auto.suppressed = false; Rec.start(); } render.autoInfo();
+};
+$('markBtn').onclick = () => { if (NATIVE) { if (Conn.state !== 'on') return toast('Not connected'); AndroidDL.engineMark(); toast('Marked. Tap it in the events list to add a label.'); } else Live.mark(); };
 $('cruiseBtn').onclick = () => {
+  if (NATIVE) return AndroidDL.engineCruise();
   Live.cruise = !Live.cruise; render.conn();
   if (Conn.state === 'on') {
     const s = Live.sample();
@@ -1558,6 +1637,7 @@ $('protoSel').onchange = e => { S.proto = e.target.value; saveSettings(); if (Co
 $('setScreen').onchange = e => { S.screen = e.target.checked; saveSettings(); };
 $('setUnits').onchange = e => { S.units = e.target.value; saveSettings(); Live.min = {}; Live.max = {}; Live.hist = []; if (Conn.state === 'on') render.tiles(); render.pidList(); };
 $('setAutoConn').onchange = e => { S.autoConn = e.target.checked; AutoConn.nextAt = 0; saveSettings(); render.autoInfo(); };
+$('setBg').onchange = e => { S.bg = e.target.checked; saveSettings(); if (!NATIVE) toast('Background logging works in the Android app'); };
 $('setAutoRec').onchange = e => { S.autoRec = e.target.checked; Auto.reset(); saveSettings(); render.autoInfo(); };
 $('setFast').onchange = e => { S.fast = e.target.checked; Conn.fastOk = true; saveSettings(); };
 $('setDebug').onchange = e => { S.debug = e.target.checked; saveSettings(); if (S.debug) Log.info('Debug log on, app ' + VERSION); };
@@ -1583,12 +1663,13 @@ $('viewLogBtn').onclick = () => {
 };
 
 // a drive left open by a crash or the app being closed: mark it done
-setTimeout(() => {
+if (!NATIVE) setTimeout(() => {   // (on Android the engine does this when it starts)
   for (const m of Drives.list()) if (!m.done) { m.done = true; m.interrupted = true; Store.write(m.id + '.json', JSON.stringify(m), false); }
 }, 50);
 render.conn(); render.liveEvents(); $('liveEvCard').style.display = 'none';
-setInterval(() => AutoConn.tick(), 3000);
+if (!NATIVE) setInterval(() => AutoConn.tick(), 3000);
 if (!NATIVE && !S.device) S.device = 'demo';
+if (NATIVE) { saveSettings(); Mirror.snapshot(); }   // hand the engine our settings, then show what it is doing right now
 if (NATIVE && Date.now() - (S.lastUpdCheck || 0) > 6 * 3600 * 1000) setTimeout(() => Upd.check(false), 1500);
 window.addEventListener('resize', () => { render.liveChart(); });
 Log.info('Started ' + VERSION + (NATIVE ? ' android' : ' browser'));

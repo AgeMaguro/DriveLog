@@ -1,5 +1,13 @@
 # DriveLog changelog
 
+## 1.0.4 (2026-11-09)
+- **Background logging:** DriveLog can now connect, record and save drives with the app closed and the screen off. The logging engine moved out of the web page into a native Android foreground service (an ongoing "DriveLog" notification shows while it runs, with Mark and Stop buttons). Settings > Automatic > "Keep logging in the background" turns it off (then logging only happens while the app is open, like before).
+- It starts by itself when you open the app (or after the phone restarts or the app updates) if an adapter is chosen and Connect automatically is on. While waiting for the adapter it wakes the phone about once a minute to try; once connected it holds the phone awake so readings don't drop. Pressing Stop in the notification (or Disconnect in the app) pauses it until you open the app or tap Connect.
+- Android asks once for permission to show notifications (logging works without it, but the notification is how you know it's running).
+- The page is now a window onto the engine: close and reopen it while a drive is recording and it picks up the live chart, events and status. Trouble codes are read through the engine between polls.
+- The old in-page engine is kept only for the browser preview (demo truck).
+- Self-test for the engine (runs on a PC against the simulated truck): `tests/EngineSelfTest.java`.
+
 ## 1.0.3 (2026-11-09)
 - **Auto start/stop:** Settings > Automatic. Starts recording when the engine is running (RPM 400+ for 2 s) and saves the drive when RPM has read zero for the engine-off delay (default 20 s). If you stop a recording by hand it stays stopped until the engine has been turned off. A dropped adapter link still saves the drive.
 - **Auto-connect:** while the app is open and an adapter is chosen, it keeps looking for the adapter (quietly, slower after each miss) and connects when the truck powers it. Pressing Disconnect pauses it until you tap Connect.
