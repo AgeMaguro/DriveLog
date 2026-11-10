@@ -120,6 +120,21 @@ canvas { width:100%; display:block; background:var(--card); border-radius:12px; 
 .banner { background:#1f2f4d; border-radius:12px; padding:10px 12px; margin-bottom:12px; display:flex; gap:10px; align-items:center; justify-content:space-between; }
 .empty { text-align:center; color:var(--dim); padding:24px 8px; }
 .hint { background:var(--card2); border-radius:10px; padding:9px 11px; font-size:13px; color:var(--dim); margin-top:8px; }
+.evlist li.tap { cursor:pointer; }
+.evlist li.tap:active { background:var(--card2); }
+.lbl { font-size:11px; padding:1px 7px; border-radius:10px; background:#24406b; color:var(--acc); margin-left:6px; white-space:nowrap; align-self:center; }
+.autoinfo { margin:-4px 2px 10px; font-size:12px; color:var(--dim); }
+.drive.sel { background:#1f2f4d; border-radius:10px; padding-left:8px; padding-right:8px; }
+table.cmp { width:100%; border-collapse:collapse; font-size:13px; font-variant-numeric:tabular-nums; }
+table.cmp th, table.cmp td { padding:6px 4px; border-bottom:1px solid var(--line); text-align:right; vertical-align:top; }
+table.cmp th { color:var(--dim); font-weight:600; font-size:12px; }
+table.cmp th:first-child, table.cmp td:first-child { text-align:left; }
+table.cmp tr:last-child td { border-bottom:0; }
+table.cmp .a, th.a { color:var(--acc); } table.cmp .b, th.b { color:var(--orange); }
+.twarn { color:var(--orange); } .tbad { color:var(--red); }
+.sw { display:inline-block; width:10px; height:10px; border-radius:2px; vertical-align:middle; margin-right:4px; }
+.zoombar { display:flex; justify-content:space-between; align-items:center; gap:8px; margin:0 0 8px; font-size:13px; }
+input.full { width:100%; }
 </style>
 </head>
 <body>
@@ -138,6 +153,7 @@ canvas { width:100%; display:block; background:var(--card); border-radius:12px; 
       <button id="markBtn">⚑ Mark</button>
       <button id="cruiseBtn">Cruise: off</button>
     </div>
+    <div id="autoInfo" class="autoinfo"></div>
     <div id="liveEmpty" class="card empty">Not connected.<br>Tap <b>Connect</b> to start. No adapter yet? Pick <b>Demo truck</b> in Settings &gt; Adapter.</div>
     <div class="tiles" id="tiles"></div>
     <div class="card" id="liveChartCard" style="display:none">
@@ -201,6 +217,14 @@ canvas { width:100%; display:block; background:var(--card); border-radius:12px; 
       <div class="setrow"><div class="l">Keep screen on while recording<span class="small dim">Logging pauses if the screen turns off.</span></div><label class="switch"><input type="checkbox" id="setScreen"><span></span></label></div>
       <div class="setrow"><div class="l">Units</div><select id="setUnits"><option value="us">US (mph, °F, psi)</option><option value="metric">Metric (km/h, °C, kPa)</option></select></div>
       <div class="setrow"><div class="l">Fast replies<span class="small dim">Tells the adapter to expect one answer per question (faster). Turns itself off if the adapter doesn't support it.</span></div><label class="switch"><input type="checkbox" id="setFast"><span></span></label></div>
+    </div>
+
+    <div class="card">
+      <h3>Automatic</h3>
+      <div class="setrow"><div class="l">Connect automatically<span class="small dim">While DriveLog is open, keeps looking for your adapter and connects as soon as the truck powers it.</span></div><label class="switch"><input type="checkbox" id="setAutoConn"><span></span></label></div>
+      <div class="setrow"><div class="l">Record automatically<span class="small dim">Starts a recording when the engine is running and saves the drive after the engine has been off for the delay below. Stopping by hand pauses it until the engine has been turned off.</span></div><label class="switch"><input type="checkbox" id="setAutoRec"><span></span></label></div>
+      <div class="setrow"><div class="l">Engine-off delay (seconds)<span class="small dim">How long RPM must read zero before the drive is saved.</span></div><input type="number" step="5" id="setAutoStop"></div>
+      <div class="hint">DriveLog has to stay open (screen on) to log. Phone in a mount with the screen on works best.</div>
     </div>
 
     <div class="card">
@@ -271,7 +295,8 @@ const SKEY = 'drivelog.settings.v1';
 const DEFAULTS = {
   device: '', deviceName: '', proto: '2', units: 'us', fast: true, screen: true, debug: false,
   gears: [3.06, 1.63, 1.00, 0.70], axle: 3.73, tire: 30.0, kLearned: null,
-  rpmJump: 500, tpsJump: 15, pidMode: {}, chart: ['0C', '0D', '11'], lastUpdCheck: 0
+  rpmJump: 500, tpsJump: 15, pidMode: {}, chart: ['0C', '0D', '11'], lastUpdCheck: 0,
+  autoConn: true, autoRec: true, autoStopSec: 20
 };
 let S = Object.assign({}, DEFAULTS);
 try { Object.assign(S, JSON.parse(localStorage.getItem(SKEY) || '{}')); } catch (e) { Log.warn('settings unreadable, using defaults'); }
@@ -428,8 +453,8 @@ const DemoTruck = {
       case '05': return one(this.coolant + 40);
       case '0F': return one(24 + 40);
       case '46': return one(18 + 40);
-      case '06': return one(128 + (Math.random() * 8 - 3));
-      case '07': return one(128 + 9);
+      case '06': return one(128 + (s.mph < 1 ? 6 : 0) + (Math.random() * 8 - 3));
+      case '07': return one(128 + (s.mph < 1 ? 13 : 9));
       case '0E': return one((s.load > 55 ? 14 : 26) * 2 + 128);
       case '10': return two(Math.round((s.rpm * s.load / 4200) * 100));
       case '14': return this.hex([0x41, P, 20 + Math.random() * 150, 0xFF]);
@@ -497,32 +522,35 @@ const Elm = {
 const Conn = {
   state: 'off', supported: new Set(), protoName: '', elmVersion: '', polling: false, timeouts: 0, fastOk: true,
   setStatus(text, cls) { const st = $('status'); st.textContent = text; st.className = cls || ''; },
-  async start() {
+  // auto = started by the auto-connect timer: failures are quiet (no popups, no prompts)
+  async start(auto) {
     if (this.state !== 'off') return this.stop('');
     const demo = S.device === 'demo' || !NATIVE;
-    if (!demo && !S.device) { toast('Pick your adapter first'); go('settings'); return; }
+    if (!demo && !S.device) { if (!auto) { toast('Pick your adapter first'); go('settings'); } return; }
     if (!demo) {
       const st = JSON.parse(AndroidDL.btStatus() || '{}');
-      if (!st.permission) { AndroidDL.requestBtPermission(); DLNative.onPermission = ok => { if (ok) this.start(); else toast('DriveLog needs the Nearby devices permission to use Bluetooth'); }; return; }
-      if (!st.enabled) { toast('Turn on Bluetooth first'); return; }
+      if (!st.permission) { if (auto) return; AndroidDL.requestBtPermission(); DLNative.onPermission = ok => { if (ok) this.start(); else toast('DriveLog needs the Nearby devices permission to use Bluetooth'); }; return; }
+      if (!st.enabled) { if (!auto) toast('Turn on Bluetooth first'); return; }
     }
     this.state = 'connecting'; render.conn();
     const tr = demo ? DemoTruck : NativeTransport;
-    this.setStatus(demo ? 'Starting demo…' : 'Connecting to adapter…', 'busy');
-    Log.info('Connecting via ' + tr.name + ' ' + (demo ? '' : S.device));
+    this.setStatus(demo ? 'Starting demo…' : auto ? 'Looking for adapter…' : 'Connecting to adapter…', 'busy');
+    Log.info('Connecting via ' + tr.name + ' ' + (demo ? '' : S.device) + (auto ? ' (auto)' : ''));
     const r = await tr.connect(S.device);
     if (this.state !== 'connecting') return;
+    if (!r.ok && auto) { this.state = 'off'; this.setStatus('Not connected', ''); render.conn(); Log.info('Auto-connect: no adapter (' + (r.msg || '') + ')'); AutoConn.failed(); return; }
     if (!r.ok) { this.state = 'off'; this.setStatus('Not connected', 'bad'); render.conn(); popup('Could not connect to the adapter', `<p>${esc(r.msg || 'Unknown error')}</p><p class="dim small">Check that the adapter is plugged in, the ignition is on, it's paired in your phone's Bluetooth settings, and no other app (like Car Scanner) is connected to it.</p>`); return; }
     Elm.transport = tr; Elm.buf = '';
     this.state = 'init'; this.setStatus('Setting up adapter…', 'busy');
-    const ok = await this.init();
-    if (!ok) return;
+    const ok = await this.init(auto);
+    if (!ok) { if (auto) AutoConn.failed(); return; }
+    AutoConn.ok(); Auto.reset();
     this.state = 'on'; this.timeouts = 0;
     this.setStatus((demo ? 'Demo · ' : '') + (this.protoName || 'Connected'), 'ok');
     render.conn(); render.tiles(); render.pidList(); render.truckInfo();
     this.poll();
   },
-  async init() {
+  async init(auto) {
     let r = await Elm.send('ATZ', 4000);
     this.elmVersion = (r.match(/ELM327[^\n]*/i) || [''])[0] || r.split('\n').pop();
     for (const c of ['ATE0', 'ATL0', 'ATS0', 'ATH0', 'ATAT1', 'ATSP' + S.proto]) { await Elm.send(c, 1500); }
@@ -535,6 +563,7 @@ const Conn = {
     }
     if (!b) {
       this.stop('');
+      if (auto) { this.setStatus('Truck not answering', ''); Log.info('Auto-connect: adapter found but the truck did not answer'); return false; }
       popup('Adapter connected, but the truck didn\'t answer', `<p>The adapter said: <code>${esc(r || 'nothing')}</code></p><p class="dim small">Turn the ignition to ON (or start the engine), check the adapter is pushed fully into the port, then connect again. If it still fails, try Protocol: Auto in Settings.</p>`);
       return false;
     }
@@ -642,6 +671,7 @@ const Live = {
     const evs = this.detect(s);
     const ev = evs.join('; ');
     evs.forEach(e => this.addEvent(e, s.t));
+    Auto.tick(s);
     if (Rec.on) Rec.add(s, ev);
     if (s.t - this.lastUi > 250) { this.lastUi = s.t; render.liveValues(s); }
   },
@@ -651,6 +681,7 @@ const Live = {
     if (Rec.on) Rec.event(e);
     render.liveEvents();
     Log.info('Event: ' + e.text);
+    return e;
   },
   mark() {
     if (Conn.state !== 'on') return toast('Not connected');
@@ -658,7 +689,7 @@ const Live = {
     const text = 'Marked' + (s.rpm != null ? ` (${Math.round(s.rpm)} rpm, ${s.mph == null ? '?' : Math.round(s.mph)} mph)` : '');
     this.addEvent(text, s.t);
     if (Rec.on) Rec.add(s, this.events[0].text);
-    toast('Marked');
+    toast('Marked. Tap it in the events list to add a label.');
   },
   // Returns a list of event texts for this sample (usually empty).
   detect(s) {
@@ -720,20 +751,22 @@ const Store = NATIVE ? {
 
 const Rec = {
   on: false, meta: null, buf: [], flushT: 0,
-  start() {
-    if (Conn.state !== 'on') return toast('Connect first');
+  start(opts) {
+    opts = opts || {};
+    if (Conn.state !== 'on') { if (!opts.auto) toast('Connect first'); return; }
     const { fast, slow } = Conn.plan();
     const cols = [...fast, ...slow];
     const id = 'd' + Date.now();
     this.meta = { id, start: Date.now(), end: Date.now(), rows: 0, cols: cols.map(p => ({ k: p, label: PIDS[p].s, unit: unitOf(p) })), units: S.units,
-      events: [], demo: Elm.transport === DemoTruck, proto: Conn.protoName, k: kFactor(), gears: S.gears.slice(), app: VERSION };
+      events: [], demo: Elm.transport === DemoTruck, proto: Conn.protoName, k: kFactor(), gears: S.gears.slice(), app: VERSION, auto: !!opts.auto };
     this.buf = []; this.on = true;
+    this.engineSeen = (Live.raw['0C'] || 0) >= 400;   // auto-stop only applies once the engine has run during this recording
     Store.write(id + '.rows', '', false);
     this.saveMeta();
     this.flushT = setInterval(() => this.flush(), 2000);
     if (NATIVE && S.screen) AndroidDL.keepScreenOn(true);
-    render.conn(); toast('Recording');
-    Log.info('Recording ' + id + ' cols ' + cols.join(','));
+    render.conn(); toast(opts.auto ? 'Engine running: recording started' : 'Recording');
+    Log.info('Recording ' + id + (opts.auto ? ' (auto)' : '') + ' cols ' + cols.join(','));
   },
   add(s, ev) {
     const row = [s.t, s.gear == null ? null : s.gear, Live.cruise ? 1 : 0, ev || '', ...this.meta.cols.map(c => {
@@ -749,16 +782,53 @@ const Rec = {
     this.saveMeta();
   },
   saveMeta() { if (this.meta) Store.write(this.meta.id + '.json', JSON.stringify(this.meta), false); },
-  stop() {
+  stop(why) {
     if (!this.on) return;
     clearInterval(this.flushT); this.flush();
     this.meta.done = true; this.saveMeta();
     this.on = false;
     if (NATIVE) AndroidDL.keepScreenOn(false);
-    toast(`Saved drive: ${fmtDur(this.meta.end - this.meta.start)}, ${this.meta.rows} rows`);
-    Log.info('Stopped recording ' + this.meta.id);
+    toast(`${why ? why + ': ' : ''}saved drive, ${fmtDur(this.meta.end - this.meta.start)}, ${this.meta.rows} rows`, why ? 4500 : 2600);
+    Log.info('Stopped recording ' + this.meta.id + (why ? ' (' + why + ')' : ''));
     this.meta = null; render.conn(); render.drives();
   }
+};
+
+/* Auto-record: start when the engine is running, save when RPM has read zero for the engine-off delay.
+   If the user stops a recording by hand while the engine runs, auto-start waits until the engine has been off. */
+const Auto = {
+  suppressed: false, runSince: 0, offSince: 0,
+  reset() { this.suppressed = false; this.runSince = 0; this.offSince = 0; },
+  tick(s) {
+    if (!S.autoRec || Conn.state !== 'on' || s.rpm == null) { this.runSince = 0; this.offSince = 0; return; }
+    if (s.rpm >= 400) {
+      this.offSince = 0;
+      if (!this.runSince) this.runSince = s.t;
+      if (Rec.on) Rec.engineSeen = true;
+      if (!Rec.on && !this.suppressed && s.t - this.runSince >= 2000) { Rec.start({ auto: true }); render.autoInfo(); }
+    } else if (s.rpm < 150) {           // engine not turning (150-400 is cranking or stalling: ignore)
+      this.runSince = 0;
+      if (!this.offSince) this.offSince = s.t;
+      if (s.t - this.offSince >= S.autoStopSec * 1000) {
+        const wasSuppressed = this.suppressed;
+        this.suppressed = false;
+        if (Rec.on && Rec.engineSeen) { Rec.stop('Engine off'); render.autoInfo(); }
+        else if (wasSuppressed) render.autoInfo();
+      }
+    }
+  }
+};
+
+/* Auto-connect: while the app is open and an adapter is chosen, keep trying (slower after each miss). */
+const AutoConn = {
+  userOff: false, fails: 0, nextAt: 0,
+  eligible() { return NATIVE && S.autoConn && S.device && S.device !== 'demo' && !this.userOff; },
+  tick() {
+    if (Conn.state !== 'off' || !this.eligible() || document.visibilityState !== 'visible' || Date.now() < this.nextAt) return;
+    Conn.start(true);
+  },
+  failed() { this.fails++; this.nextAt = Date.now() + Math.min(60000, 8000 * this.fails); render.autoInfo(); },
+  ok() { this.fails = 0; this.nextAt = 0; }
 };
 window.saveNow = () => { try { Rec.flush(); } catch (e) {} };
 
@@ -779,9 +849,11 @@ const Drives = {
     const head = ['time', 'elapsed_s', 'gear_calc', 'cruise_on', 'event', ...meta.cols.map(c => `${c.label} (${c.unit})`)];
     const q = v => (v == null ? '' : /[",\n]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v));
     const lines = [head.map(q).join(',')];
+    const labels = new Map((meta.events || []).filter(e => e.label).map(e => [e.t, e.label]));   // your labels on marks go into the event column
     for (const r of rows) {
       const [t, gear, cruise, ev, ...vals] = r;
-      lines.push([stamp(new Date(t)), ((t - meta.start) / 1000).toFixed(2), gear == null ? '' : gear, cruise, ev, ...vals].map(q).join(','));
+      const evCell = labels.has(t) ? (ev ? ev + ' ' : '') + '[' + labels.get(t) + ']' : ev;
+      lines.push([stamp(new Date(t)), ((t - meta.start) / 1000).toFixed(2), gear == null ? '' : gear, cruise, evCell, ...vals].map(q).join(','));
     }
     return lines.join('\r\n') + '\r\n';
   },
@@ -822,6 +894,82 @@ const Drives = {
     return best;
   }
 };
+
+/* =====================================================================
+   Fuel trims by driving state, drive normalising, labels (used by Drives + Compare)
+   ===================================================================== */
+const TRIM_STATES = [['idle', 'Idle'], ['cruise', 'Cruise'], ['accel', 'Accelerating'], ['decel', 'Decelerating']];
+const TRIM_COLORS = { '06': '#7fb2ff', '07': '#ffb86b', '08': '#7ee0a1', '09': '#c79bff' };
+const LABELS = ['Hesitation', 'Surge', 'Stumble', 'Rough idle', 'Hard shift', 'Noise', 'False alarm'];
+const colIdx = (meta, k) => { const i = meta.cols.findIndex(c => c.k === k); return i < 0 ? -1 : i + 4; };
+
+/* Splits the drive into idle / cruise / accelerating / decelerating (from how speed changes over ~2 s) and averages
+   each fuel trim in each state. Rows where the engine isn't turning are skipped. Returns null if there are no trims. */
+function trimAnalysis(meta, rows) {
+  const keys = ['06', '07', '08', '09'].filter(k => colIdx(meta, k) >= 0);
+  const iS = colIdx(meta, '0D'), iR = colIdx(meta, '0C');
+  if (!keys.length || iS < 0) return null;
+  const toMph = meta.units === 'metric' ? 0.621371 : 1;
+  const ki = keys.map(k => colIdx(meta, k));
+  const sums = {}, secs = {}, strip = [];
+  for (const [st] of TRIM_STATES) { secs[st] = 0; sums[st] = keys.map(() => [0, 0]); }
+  let j = 0, last = null;
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    if (r[iS] == null) continue;
+    if (iR >= 0 && r[iR] != null && r[iR] < 150) continue;
+    const v = r[iS] * toMph;
+    while (j < i && r[0] - rows[j][0] > 2000) j++;
+    const rj = rows[j], dt = (r[0] - rj[0]) / 1000;
+    const dv = rj[iS] != null && dt >= 1 ? (v - rj[iS] * toMph) / dt : 0;
+    const state = v < 2 ? 'idle' : dv < -1 ? 'decel' : dv > 1 ? 'accel' : 'cruise';
+    const prev = i > 0 ? rows[i - 1][0] : r[0], w = Math.min(1, (r[0] - prev) / 1000);
+    secs[state] += w;
+    ki.forEach((c, n) => { const x = r[c]; if (x != null) { sums[state][n][0] += x * w; sums[state][n][1] += w; } });
+    if (last && last[2] === state && r[0] - last[1] < 2000) last[1] = r[0]; else { last = [prev, r[0], state]; strip.push(last); }
+  }
+  const mean = {};
+  for (const [st] of TRIM_STATES) { mean[st] = {}; keys.forEach((k, n) => { const [a, b] = sums[st][n]; mean[st][k] = b > 0 ? a / b : null; }); }
+  return { keys, secs, mean, strip };
+}
+// total trim (short + long) for the first bank that has any
+function trimTotal(an, st) {
+  const bank = an.keys.some(k => k === '06' || k === '07') ? ['06', '07'] : ['08', '09'];
+  const part = bank.map(k => an.mean[st][k]);
+  if (part.every(x => x == null)) return { total: null, s: null, l: null };
+  return { total: part.reduce((a, b) => a + (b == null ? 0 : b), 0), s: part[0], l: part[1] };
+}
+const fmtSigned = v => v == null || !isFinite(v) ? '–' : (v >= 0 ? '+' : '') + v.toFixed(1);
+const trimClass = t => t == null ? '' : Math.abs(t) > 15 ? 'tbad' : Math.abs(t) > 10 ? 'twarn' : '';
+function trimTableHtml(an) {
+  const banks = [['Bank 1', '06', '07'], ['Bank 2', '08', '09']].filter(([, a, b]) => an.keys.includes(a) || an.keys.includes(b));
+  return banks.map(([name, a, b]) => {
+    const body = TRIM_STATES.filter(([st]) => an.secs[st] >= 3).map(([st, label]) => {
+      const x = an.mean[st][a], y = an.mean[st][b], tot = (x == null && y == null) ? null : (x || 0) + (y || 0);
+      return `<tr><td>${label}<div class="small dim">${fmtDur(an.secs[st] * 1000)}</div></td><td>${fmtSigned(x)}</td><td>${fmtSigned(y)}</td><td class="${trimClass(tot)}"><b>${fmtSigned(tot)}</b></td></tr>`;
+    }).join('');
+    return `<table class="cmp" style="margin-bottom:8px"><tr><th>${banks.length > 1 ? name : 'Average %'}</th><th>Short</th><th>Long</th><th>Total</th></tr>${body || '<tr><td colspan="4" class="dim">Not enough driving in this log.</td></tr>'}</table>`;
+  }).join('');
+}
+
+// Converts a drive's values to the units currently chosen in Settings so drives recorded in different units can be compared.
+const INV = { temp: c => (c - 32) * 5 / 9, speed: v => v / 0.621371, press: v => v / 0.145038, dist: v => v / 0.621371 };
+function normDrive(meta, rows) {
+  if (meta.units === S.units) return { meta, rows };
+  const conv = meta.cols.map(c => {
+    const p = PIDS[c.k]; if (!p || !p.k) return null;
+    const inv = meta.units === 'us' ? INV[p.k] : (x => x);
+    return x => UNITS[S.units][p.k][1](inv(x));
+  });
+  const out = rows.map(r => { const n = r.slice(); conv.forEach((f, i) => { if (f && n[i + 4] != null) n[i + 4] = f(n[i + 4]); }); return n; });
+  const cols = meta.cols.map(c => PIDS[c.k] ? Object.assign({}, c, { unit: unitOf(c.k) }) : c);
+  return { meta: Object.assign({}, meta, { units: S.units, cols }), rows: out };
+}
+// Saves a drive's metadata (name, labels) without the temporary fields the detail view adds.
+function saveDriveMeta(meta) {
+  const clean = {}; for (const k in meta) if (k[0] !== '_') clean[k] = meta[k];
+  Store.write(meta.id + '.json', JSON.stringify(clean), false);
+}
 
 /* =====================================================================
    Trouble codes
@@ -906,11 +1054,7 @@ function drawChart(cv, series, t0, t1, events) {
   g.strokeStyle = '#2e3542'; g.lineWidth = 1;
   for (let i = 0; i <= 4; i++) { const y = T + (B - T) * i / 4; g.beginPath(); g.moveTo(L, y); g.lineTo(R, y); g.stroke(); }
   const X = t => L + (R - L) * (t - t0) / Math.max(1, t1 - t0);
-  for (const e of events || []) {
-    if (e.t < t0 || e.t > t1) continue;
-    g.strokeStyle = /Downshift/.test(e.text) ? '#ffb86b' : /flare/.test(e.text) ? '#ff6b6b' : '#5a6578';
-    g.setLineDash([3, 3]); g.beginPath(); g.moveTo(X(e.t), T); g.lineTo(X(e.t), B); g.stroke(); g.setLineDash([]);
-  }
+  for (const e of events || []) { if (e.t >= t0 && e.t <= t1) drawEventLine(g, X(e.t), T, B, e); }
   series.forEach((s, si) => {
     const vals = s.pts.map(p => p[1]).filter(v => v != null);
     if (!vals.length) return;
@@ -930,6 +1074,56 @@ function drawChart(cv, series, t0, t1, events) {
     const txt = `${s.name} ${fmtNum(Math.min(...vals), s.d)}–${fmtNum(Math.max(...vals), s.d)}`;
     g.fillStyle = s.color; g.fillText(txt, x, h - 4); x += g.measureText(txt).width + 12;
   });
+}
+function drawEventLine(g, x, T, B, e) {
+  if (/^Marked/.test(e.text)) {   // your marks: solid blue line with a little flag
+    g.strokeStyle = '#7fb2ff'; g.fillStyle = '#7fb2ff'; g.lineWidth = 2;
+    g.beginPath(); g.moveTo(x, T); g.lineTo(x, B); g.stroke();
+    g.beginPath(); g.moveTo(x, T); g.lineTo(x + 8, T + 3.5); g.lineTo(x, T + 7); g.closePath(); g.fill();
+    g.lineWidth = 1; return;
+  }
+  g.strokeStyle = /Downshift/.test(e.text) ? '#ffb86b' : /flare/.test(e.text) ? '#ff6b6b' : '#5a6578';
+  g.setLineDash([3, 3]); g.beginPath(); g.moveTo(x, T); g.lineTo(x, B); g.stroke(); g.setLineDash([]);
+}
+/* Chart with ONE shared y-scale for all lines (fuel trims, trip comparison), y-axis labels, optional
+   shaded band, zero line and a colour strip underneath. o: {min,max,ticks,zero,band,strip,origin} */
+const STATE_COLOR = { idle: '#5a6578', cruise: '#7fb2ff', accel: '#ffb86b', decel: '#7ee0a1' };
+function drawScaleChart(cv, series, t0, t1, events, o) {
+  o = o || {};
+  const { g, w, h } = setupCanvas(cv);
+  g.clearRect(0, 0, w, h);
+  const L = 36, R = w - 6, T = 10, B = o.strip ? h - 30 : h - 20;
+  let dmin = Infinity, dmax = -Infinity;
+  series.forEach(s => s.pts.forEach(p => { if (p[1] != null) { if (p[1] < dmin) dmin = p[1]; if (p[1] > dmax) dmax = p[1]; } }));
+  if (!isFinite(dmin)) { dmin = 0; dmax = 1; }
+  let lo, hi;
+  if (o.min != null && o.max != null) { lo = Math.min(o.min, Math.floor(dmin / 5) * 5); hi = Math.max(o.max, Math.ceil(dmax / 5) * 5); }
+  else { lo = dmin; hi = dmax; if (hi - lo < 1e-6) { hi += 1; lo -= 1; } const pd = (hi - lo) * 0.08; lo -= pd; hi += pd; }
+  const X = t => L + (R - L) * (t - t0) / Math.max(1, t1 - t0), Y = v => B - (B - T) * (v - lo) / (hi - lo);
+  let ticks, dec = 0;
+  if (o.ticks) ticks = o.ticks.filter(v => v >= lo && v <= hi);
+  else {   // round-number ticks (1, 2, 2.5 or 5 times a power of ten)
+    const raw = (hi - lo) / 4, mag = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / mag;
+    const step = (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * mag;
+    dec = step >= 1 ? (step % 1 ? 1 : 0) : Math.min(3, Math.ceil(-Math.log10(step)) + (step * 10 % 1 ? 1 : 0));
+    ticks = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) ticks.push(+v.toFixed(6));
+  }
+  if (o.band) { g.fillStyle = 'rgba(126,224,161,.08)'; g.fillRect(L, Y(o.band[1]), R - L, Y(o.band[0]) - Y(o.band[1])); }
+  g.font = '10px system-ui'; g.textAlign = 'right'; g.lineWidth = 1;
+  ticks.forEach(v => { g.strokeStyle = o.zero && v === 0 ? '#5a6578' : '#2e3542'; g.beginPath(); g.moveTo(L, Y(v)); g.lineTo(R, Y(v)); g.stroke(); g.fillStyle = '#9aa4b8'; g.fillText(v.toFixed(dec), L - 4, Y(v) + 3); });
+  g.save(); g.beginPath(); g.rect(L, T - 2, R - L, B - T + 4); g.clip();
+  for (const e of events || []) { if (e.t >= t0 && e.t <= t1) drawEventLine(g, X(e.t), T, B, e); }
+  series.forEach(s => {
+    g.strokeStyle = s.color; g.lineWidth = 2; g.beginPath();
+    let started = false;
+    for (const [t, v] of s.pts) { if (v == null) { started = false; continue; } const x = X(t), y = Y(v); if (!started) { g.moveTo(x, y); started = true; } else g.lineTo(x, y); }
+    g.stroke();
+  });
+  g.restore();
+  if (o.strip) for (const [a, b, st] of o.strip) { if (b < t0 || a > t1) continue; g.fillStyle = STATE_COLOR[st]; const x0 = X(Math.max(a, t0)), x1 = X(Math.min(b, t1)); g.fillRect(x0, B + 5, Math.max(1, x1 - x0), 5); }
+  g.fillStyle = '#9aa4b8'; g.font = '11px system-ui';
+  const org = o.origin || 0;
+  g.textAlign = 'left'; g.fillText(fmtClock(t0 - org), L, h - 4); g.textAlign = 'right'; g.fillText(fmtClock(t1 - org), R, h - 4);
 }
 function fmtNum(v, d) { return v == null || !isFinite(v) ? '–' : (+v).toFixed(d == null ? 0 : d); }
 function drawHistogram(cv, ratios, K, gears) {
@@ -951,12 +1145,12 @@ function drawHistogram(cv, ratios, K, gears) {
 /* =====================================================================
    UI rendering
    ===================================================================== */
-let page = 'live', openDrive = null;
+let page = 'live', openDrive = null, openCmp = null, cmpMode = false, cmpSel = [];
 function go(p) {
   page = p;
   document.querySelectorAll('.page').forEach(x => x.classList.toggle('on', x.id === 'p-' + p));
   document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.p === p));
-  if (p === 'drives') { openDrive = null; render.drives(); }
+  if (p === 'drives') { openDrive = null; openCmp = null; cmpMode = false; cmpSel = []; render.drives(); }
   if (p === 'settings') render.settings();
   if (p === 'live') render.liveChart();
   $('main') && ($('main').scrollTop = 0);
@@ -967,7 +1161,7 @@ function popup(title, html, buttons) {
   const box = $('modalBox');
   box.innerHTML = `<h2>${esc(title)}</h2><div>${html}</div><div class="row" style="justify-content:flex-end;margin-top:12px" id="modalBtns"></div>`;
   (buttons || [['OK']]).forEach(([label, fn, cls]) => {
-    const b = document.createElement('button'); b.textContent = label; if (cls) b.className = cls; else if (label !== 'Cancel') b.className = 'pri';
+    const b = document.createElement('button'); b.textContent = label; if (cls) b.className = cls; else if (label !== 'Cancel' && label !== 'Close') b.className = 'pri';
     b.onclick = () => { closeModal(); fn && fn(); }; $('modalBtns').appendChild(b);
   });
   $('modal').classList.add('on');
@@ -975,8 +1169,25 @@ function popup(title, html, buttons) {
 function closeModal() { $('modal').classList.remove('on'); }
 $('modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
 
+// Label for one of your marks ("Hesitation", "Surge"...). e is the event object; after() runs once it is saved.
+function labelModal(e, after, topHtml, extraButtons) {
+  popup('Label this mark', `${topHtml || `<p style="margin:0 0 6px">${esc(e.text)}</p>`}<div class="chips" id="lblChips">${LABELS.map(l => `<span class="chip" data-l="${esc(l)}">${esc(l)}</span>`).join('')}</div><input type="text" class="full" id="lblIn" maxlength="40" placeholder="Or type what you felt" value="${esc(e.label || '')}">`,
+    [...(extraButtons || []), ['Cancel'], ['Save', () => { const v = $('lblIn').value.trim(); if (v) e.label = v; else delete e.label; after && after(); }]]);
+  $('lblChips').querySelectorAll('.chip').forEach(c => c.onclick = () => { $('lblIn').value = c.dataset.l; });
+}
+// Sensor readings from the row nearest to time t of a saved drive.
+function snapHtml(meta, rows, t) {
+  let best = null, bd = Infinity;
+  for (const r of rows) { const dd = Math.abs(r[0] - t); if (dd < bd) { bd = dd; best = r; } else if (r[0] > t) break; }
+  if (!best || bd > 5000) return '';
+  const items = meta.cols.map((c, i) => best[i + 4] == null ? '' : `<div><span class="dim">${esc(c.label)}</span> <b>${best[i + 4]}</b> <span class="dim">${esc(c.unit || '')}</span></div>`).join('');
+  return `<div class="small" style="display:grid;grid-template-columns:1fr 1fr;gap:3px 10px;margin:8px 0;max-height:32vh;overflow:auto">${items}</div>`;
+}
+
 window.onBack = () => {
   if ($('modal').classList.contains('on')) { closeModal(); return true; }
+  if (page === 'drives' && openCmp) { openCmp = null; render.drives(); return true; }
+  if (page === 'drives' && cmpMode) { cmpMode = false; cmpSel = []; render.drives(); return true; }
   if (page === 'drives' && openDrive) { openDrive = null; render.drives(); return true; }
   if (page !== 'live') { go('live'); return true; }
   return false;
@@ -991,6 +1202,7 @@ const render = {
     $('recBtn').classList.toggle('rec', Rec.on);
     $('cruiseBtn').textContent = 'Cruise: ' + (Live.cruise ? 'ON' : 'off');
     $('cruiseBtn').classList.toggle('on', Live.cruise);
+    render.autoInfo();
     const on = st === 'on';
     $('liveEmpty').style.display = on ? 'none' : '';
     $('liveChartCard').style.display = on ? '' : 'none';
@@ -1034,20 +1246,46 @@ const render = {
     drawChart($('liveChart'), series, t0, now, Live.events);
     $('liveLegend').innerHTML = series.map(s => `<span><i style="background:${s.color}"></i>${esc(s.name)}</span>`).join('');
   },
+  autoInfo() {
+    let t = '';
+    if (Conn.state !== 'on') {
+      if (AutoConn.eligible()) t = 'Auto-connect is on: DriveLog connects when it finds your adapter.';
+      else if (NATIVE && S.autoConn && S.device && S.device !== 'demo' && AutoConn.userOff) t = 'Auto-connect paused. Tap Connect to resume.';
+    } else if (S.autoRec) {
+      t = Rec.on ? (Rec.engineSeen ? 'Auto-record: the drive is saved when the engine stops.' : 'Recording. Auto-stop starts once the engine has run.')
+        : Auto.suppressed ? 'Auto-record paused. It restarts after the engine has been turned off.' : 'Auto-record: starts when the engine is running.';
+    }
+    const el = $('autoInfo'); el.textContent = t; el.style.display = t ? '' : 'none';
+  },
   liveEvents() {
     $('liveEvCard').style.display = '';
-    $('liveEvents').innerHTML = Live.events.length ? Live.events.slice(0, 8).map(e => `<li><span class="t">${new Date(e.t).toTimeString().slice(0, 8)}</span><span class="${evClass(e.text)}">${esc(e.text)}</span></li>`).join('') : '<li class="dim">Nothing yet. Downshifts, RPM flares and throttle jumps show up here.</li>';
+    const ul = $('liveEvents'), list = Live.events.slice(0, 8);
+    ul.innerHTML = list.length ? list.map((e, i) => `<li class="${/^Marked/.test(e.text) ? 'tap' : ''}" data-i="${i}"><span class="t">${new Date(e.t).toTimeString().slice(0, 8)}</span><span class="${evClass(e.text)}">${esc(e.text)}</span>${e.label ? `<span class="lbl">${esc(e.label)}</span>` : ''}</li>`).join('') : '<li class="dim">Nothing yet. Downshifts, RPM flares, throttle jumps and your marks show up here. Tap a mark to label it.</li>';
+    ul.querySelectorAll('li.tap').forEach(li => li.onclick = () => { const e = list[+li.dataset.i]; labelModal(e, () => { if (Rec.on) Rec.saveMeta(); render.liveEvents(); }); });
   },
   drives() {
+    if (openCmp) return render.compare();
     if (openDrive) return render.driveDetail(openDrive);
     $('driveDetail').style.display = 'none'; $('drivesList').style.display = '';
     const list = Drives.list();
-    if (!list.length) { $('drivesList').innerHTML = '<div class="card empty">No drives yet.<br>Connect and tap <b>● Record</b> on the Live tab.</div>'; return; }
-    $('drivesList').innerHTML = '<div class="card">' + list.map(m => {
-      const d = new Date(m.start);
-      return `<div class="drive" data-id="${m.id}"><div><div>${d.toLocaleDateString()} ${d.toTimeString().slice(0, 5)}${m.demo ? ' <span class="dim small">(demo)</span>' : ''}${!m.done && !(Rec.meta && Rec.meta.id === m.id) ? ' <span class="dim small">(app closed while recording)</span>' : ''}</div><div class="small dim">${fmtDur(m.end - m.start)} · ${m.rows} rows · ${m.events.length} events</div></div><span class="dim">›</span></div>`;
+    if (!list.length) { $('drivesList').innerHTML = '<div class="card empty">No drives yet.<br>Connect and tap <b>● Record</b> on the Live tab, or turn on Record automatically in Settings.</div>'; return; }
+    if (list.length < 2) { cmpMode = false; cmpSel = []; }
+    const head = list.length >= 2 ? `<div class="row sp" style="margin-bottom:10px"><span class="dim small">${cmpMode ? (cmpSel.length ? cmpSel.length + ' of 2 picked' : 'Pick two drives to compare') : list.length + ' drives'}</span><span class="row">${cmpMode && cmpSel.length === 2 ? '<button class="pri" id="cmpGo">Compare</button>' : ''}<button id="cmpBtn">${cmpMode ? 'Cancel' : 'Compare…'}</button></span></div>` : '';
+    $('drivesList').innerHTML = head + '<div class="card">' + list.map(m => {
+      const d = new Date(m.start), when = d.toLocaleDateString() + ' ' + d.toTimeString().slice(0, 5);
+      const picked = cmpSel.indexOf(m.id);
+      return `<div class="drive${picked >= 0 ? ' sel' : ''}" data-id="${m.id}"><div><div>${m.name ? `<b>${esc(m.name)}</b> <span class="dim small">${when}</span>` : when}${m.demo ? ' <span class="dim small">(demo)</span>' : ''}${m.auto ? ' <span class="dim small">(auto)</span>' : ''}${!m.done && !(Rec.meta && Rec.meta.id === m.id) ? ' <span class="dim small">(app closed while recording)</span>' : ''}</div><div class="small dim">${fmtDur(m.end - m.start)} · ${m.rows} rows · ${m.events.length} events</div></div><span class="${picked >= 0 ? '' : 'dim'}">${cmpMode ? (picked >= 0 ? '✓' : '○') : '›'}</span></div>`;
     }).join('') + '</div>';
-    $('drivesList').querySelectorAll('.drive').forEach(el => el.onclick = () => { openDrive = el.dataset.id; render.drives(); $('main').scrollTop = 0; });
+    $('drivesList').querySelectorAll('.drive').forEach(el => el.onclick = () => {
+      const id = el.dataset.id;
+      if (cmpMode) { const i = cmpSel.indexOf(id); if (i >= 0) cmpSel.splice(i, 1); else { if (cmpSel.length >= 2) cmpSel.shift(); cmpSel.push(id); } render.drives(); return; }
+      openDrive = id; render.drives(); $('main').scrollTop = 0;
+    });
+    if ($('cmpBtn')) $('cmpBtn').onclick = () => { cmpMode = !cmpMode; cmpSel = []; render.drives(); };
+    if ($('cmpGo')) $('cmpGo').onclick = () => {
+      const [a, b] = cmpSel.map(id => list.find(m => m.id === id)).sort((x, y) => x.start - y.start);
+      openCmp = { a: a.id, b: b.id, k: null, align: 'start', data: null }; cmpMode = false; cmpSel = []; render.drives(); $('main').scrollTop = 0;
+    };
   },
   driveDetail(id) {
     const meta = Drives.list().find(m => m.id === id);
@@ -1057,11 +1295,14 @@ const render = {
     const d = new Date(meta.start);
     const chartKeys = (meta.chart || S.chart).filter(k => meta.cols.some(c => c.k === k));
     meta._chart = chartKeys.length ? chartKeys : meta.cols.slice(0, 3).map(c => c.k);
+    meta._zoom = null;
+    const an = trimAnalysis(meta, rows);
     $('drivesList').style.display = 'none';
     const el = $('driveDetail'); el.style.display = '';
+    const evRows = () => meta.events.length ? meta.events.map((e, i) => `<li class="tap" data-i="${i}"><span class="t">${fmtClock(e.t - meta.start)}</span><span class="${evClass(e.text)}">${esc(e.text)}</span>${e.label ? `<span class="lbl">${esc(e.label)}</span>` : ''}</li>`).join('') : '<li class="dim">No events in this drive.</li>';
     el.innerHTML = `
-      <div class="row sp" style="margin-bottom:10px"><button id="ddBack">‹ Drives</button><span class="dim small">${d.toLocaleDateString()} ${d.toTimeString().slice(0, 5)}${meta.demo ? ' (demo)' : ''}</span></div>
-      <div class="card"><div class="stats">
+      <div class="row sp" style="margin-bottom:10px"><button id="ddBack">‹ Drives</button><span class="dim small">${d.toLocaleDateString()} ${d.toTimeString().slice(0, 5)}${meta.demo ? ' (demo)' : ''}${meta.auto ? ' (auto)' : ''}</span></div>
+      <div class="card"><input type="text" class="full" id="ddName" maxlength="50" placeholder="Name this drive (e.g. before new MAF sensor)" value="${esc(meta.name || '')}" style="margin-bottom:10px"><div class="stats">
         <div><b>${fmtDur(st.dur)}</b><span>duration</span></div>
         <div><b>${fmtNum(st.dist, 1)}</b><span>${dU}</span></div>
         <div><b>${fmtNum(st.avgSpeed, 0)}</b><span>avg ${spU} moving</span></div>
@@ -1073,22 +1314,47 @@ const render = {
         <div><b>${fmtNum(st.rate, 1)}</b><span>rows / sec</span></div>
       </div>
       <div class="row" style="margin-top:10px"><button class="pri" id="ddShare">Share CSV</button><button id="ddSave">Save to Downloads</button><button class="danger" id="ddDel">Delete</button></div></div>
-      <div class="card"><h3>Chart</h3><div class="chips" id="ddChips"></div><canvas id="ddChart" height="210"></canvas></div>
-      <div class="card"><h3>Events</h3><ul class="evlist">${meta.events.length ? meta.events.map(e => `<li><span class="t">${fmtClock(e.t - meta.start)}</span><span class="${evClass(e.text)}">${esc(e.text)}</span></li>`).join('') : '<li class="dim">No events in this drive.</li>'}</ul></div>
+      <div class="card" id="ddChartCard"><h3>Chart</h3><div class="zoombar" id="ddZoom" style="display:none"></div><div class="chips" id="ddChips"></div><canvas id="ddChart" height="210"></canvas></div>
+      ${an ? `<div class="card" id="ddTrimCard"><h3>Fuel trims</h3>
+        <canvas id="ddTrim" height="200"></canvas>
+        <div class="legend">${an.keys.map(k => `<span><i style="background:${TRIM_COLORS[k]}"></i>${esc(PIDS[k].s)}</span>`).join('')}</div>
+        <div class="legend" style="margin-top:2px">${TRIM_STATES.map(([s2, l]) => `<span><span class="sw" style="background:${STATE_COLOR[s2]}"></span>${l}</span>`).join('')}</div>
+        <div style="margin-top:10px">${trimTableHtml(an)}</div>
+        <div class="hint">Positive trim means the computer is adding fuel to make up for something (possible causes: an intake or vacuum leak, weak fuel delivery, a dirty MAF sensor). A leak usually shows most at idle. Negative means it is taking fuel away. A total within about ±10% is normal. Decelerating matters least because fuel is often cut. The coloured strip under the chart shows the driving state.</div></div>` : ''}
+      <div class="card"><h3>Events</h3><div class="small dim" style="margin-bottom:4px">Tap an event to see the readings at that moment${meta.events.some(e => /^Marked/.test(e.text)) ? ', label your marks' : ''} or jump the charts to it.</div><ul class="evlist" id="ddEvents">${evRows()}</ul></div>
       <div class="card"><h3>Gears</h3><div class="small dim">Each bar is how often the truck ran at that RPM-per-mph. Tall bars are gears; the dashed lines are where DriveLog expects each gear right now. If they don't line up, tap Learn.</div>
         <canvas id="ddHist" height="140" style="margin-top:8px"></canvas><div id="ddLearnOut" class="small" style="margin-top:8px"></div>
         <div class="row" style="margin-top:8px"><button id="ddLearn">Learn gears from this drive</button></div></div>`;
+    const zoomRange = () => meta._zoom || [meta.start, Math.max(meta.end, meta.start + 1000)];
+    const visible = () => { const [z0, z1] = zoomRange(); return meta._zoom ? rows.filter(r => r[0] >= z0 && r[0] <= z1) : rows; };
     const drawDD = () => {
-      const series = meta._chart.map((k, i) => { const ci = meta.cols.findIndex(c => c.k === k) + 4; return { name: meta.cols[ci - 4].label, color: COLORS[i], d: PIDS[k] ? PIDS[k].d : 1, pts: rows.map(r => [r[0], r[ci]]) }; });
-      drawChart($('ddChart'), series, meta.start, Math.max(meta.end, meta.start + 1000), meta.events);
+      const [z0, z1] = zoomRange(), vis = visible();
+      const series = meta._chart.map((k, i) => { const ci = meta.cols.findIndex(c => c.k === k) + 4; return { name: meta.cols[ci - 4].label, color: COLORS[i], d: PIDS[k] ? PIDS[k].d : 1, pts: vis.map(r => [r[0], r[ci]]) }; });
+      drawChart($('ddChart'), series, z0, z1, meta.events);
       $('ddChips').innerHTML = meta.cols.map(c => { const i = meta._chart.indexOf(c.k); return `<span class="chip${i >= 0 ? ' on' : ''}" data-k="${c.k}" style="${i >= 0 ? '--c:' + COLORS[i] : ''}">${esc(c.label)}</span>`; }).join('');
       $('ddChips').querySelectorAll('.chip').forEach(ch => ch.onclick = () => {
         const k = ch.dataset.k, i = meta._chart.indexOf(k);
         if (i >= 0) meta._chart.splice(i, 1); else { if (meta._chart.length >= 3) meta._chart.shift(); meta._chart.push(k); }
         drawDD();
       });
+      const zb = $('ddZoom');
+      if (meta._zoom) { zb.style.display = ''; zb.innerHTML = `<span class="dim">Showing ${fmtClock(z0 - meta.start)} to ${fmtClock(z1 - meta.start)}</span><button id="ddUnzoom">Show full drive</button>`; $('ddUnzoom').onclick = () => { meta._zoom = null; drawDD(); }; }
+      else zb.style.display = 'none';
+      if (an) {
+        const ts = an.keys.map(k => { const ci = colIdx(meta, k); return { name: PIDS[k].s, color: TRIM_COLORS[k], pts: vis.map(r => [r[0], r[ci]]) }; });
+        drawScaleChart($('ddTrim'), ts, z0, z1, meta.events, { min: -25, max: 25, ticks: [-20, -10, 0, 10, 20], zero: true, band: [-10, 10], strip: an.strip, origin: meta.start });
+      }
     };
     drawDD();
+    const showOnChart = e => ['Show on chart', () => { meta._zoom = [e.t - 20000, e.t + 20000]; drawDD(); $('ddChartCard').scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 'sec'];
+    const openEv = i => {
+      const e = meta.events[i], snap = snapHtml(meta, rows, e.t), head = `<p style="margin:0 0 4px"><b>${esc(e.text)}</b> <span class="dim">at ${fmtClock(e.t - meta.start)}</span></p>`;
+      if (/^Marked/.test(e.text)) labelModal(e, () => { saveDriveMeta(meta); $('ddEvents').innerHTML = evRows(); bindEv(); drawDD(); }, head + snap, [showOnChart(e)]);
+      else popup('Event', head + snap, [['Close'], showOnChart(e)]);
+    };
+    const bindEv = () => $('ddEvents').querySelectorAll('li.tap').forEach(li => li.onclick = () => openEv(+li.dataset.i));
+    bindEv();
+    $('ddName').onchange = e => { const v = e.target.value.trim(); if (v) meta.name = v; else delete meta.name; saveDriveMeta(meta); toast('Saved'); };
     const iR = meta.cols.findIndex(c => c.k === '0C') + 4, iS = meta.cols.findIndex(c => c.k === '0D') + 4, toMph = meta.units === 'metric' ? 0.621371 : 1;
     const ratios = iR >= 4 && iS >= 4 ? rows.filter(r => r[iR] != null && r[iS] != null && r[iS] * toMph >= 12).map(r => r[iR] / (r[iS] * toMph)) : [];
     if (ratios.length) drawHistogram($('ddHist'), ratios, kFactor(), S.gears); else $('ddHist').style.display = 'none';
@@ -1113,12 +1379,72 @@ const render = {
       }, 30);
     };
   },
+  compare() {
+    const o = openCmp, metas = Drives.list();
+    const A0 = metas.find(m => m.id === o.a), B0 = metas.find(m => m.id === o.b);
+    if (!A0 || !B0) { openCmp = null; return render.drives(); }
+    if (!o.data) o.data = [normDrive(A0, Drives.rows(A0.id)), normDrive(B0, Drives.rows(B0.id))];
+    const [A, B] = o.data;
+    const common = A.meta.cols.filter(c => B.meta.cols.some(x => x.k === c.k));
+    if (!o.k || !common.some(c => c.k === o.k)) o.k = (['06', '07', '0C', '11', '04'].find(k => common.some(c => c.k === k))) || (common[0] ? common[0].k : null);
+    const spU = S.units === 'metric' ? 'km/h' : 'mph', dU = S.units === 'metric' ? 'km' : 'mi', tU = S.units === 'metric' ? '°C' : '°F';
+    const sA = Drives.stats(A.meta, A.rows), sB = Drives.stats(B.meta, B.rows);
+    const title = m => m.name ? esc(m.name) : new Date(m.start).toLocaleDateString() + ' ' + new Date(m.start).toTimeString().slice(0, 5);
+    const cnt = (m, re) => m.events.filter(e => re.test(e.text)).length;
+    const tr = (label, a, b) => `<tr><td>${label}</td><td class="a">${a}</td><td class="b">${b}</td></tr>`;
+    const anA = trimAnalysis(A.meta, A.rows), anB = trimAnalysis(B.meta, B.rows);
+    let trimHtml = '';
+    if (anA && anB) {
+      const body = TRIM_STATES.filter(([s2]) => anA.secs[s2] >= 3 && anB.secs[s2] >= 3).map(([s2, l]) => {
+        const a = trimTotal(anA, s2), b = trimTotal(anB, s2), dlt = a.total == null || b.total == null ? null : b.total - a.total;
+        const cell = (x, c) => `<td class="${c}"><b class="${trimClass(x.total)}">${fmtSigned(x.total)}</b><div class="small dim">S ${fmtSigned(x.s)} · L ${fmtSigned(x.l)}</div></td>`;
+        return `<tr><td>${l}</td>${cell(a, 'a')}${cell(b, 'b')}<td><b>${fmtSigned(dlt)}</b></td></tr>`;
+      }).join('');
+      trimHtml = `<div class="card"><h3>Fuel trims by driving state</h3><table class="cmp"><tr><th></th><th class="a">A total</th><th class="b">B total</th><th>B − A</th></tr>${body || '<tr><td colspan="4" class="dim">Not enough driving in both logs.</td></tr>'}</table><div class="small dim" style="margin-top:8px">Average short-term (S) and long-term (L) trim in %. A total closer to zero means the computer needed to correct less.</div></div>`;
+    }
+    $('drivesList').style.display = 'none';
+    const el = $('driveDetail'); el.style.display = '';
+    el.innerHTML = `
+      <div class="row sp" style="margin-bottom:10px"><button id="cmBack">‹ Drives</button><span class="dim small">A is the older drive</span></div>
+      <div class="card"><table class="cmp">
+        <tr><th></th><th class="a">A<div class="small dim" style="font-weight:400">${title(A.meta)}</div></th><th class="b">B<div class="small dim" style="font-weight:400">${title(B.meta)}</div></th></tr>
+        ${tr('Duration', fmtDur(sA.dur), fmtDur(sB.dur))}
+        ${tr('Distance (' + dU + ')', fmtNum(sA.dist, 1), fmtNum(sB.dist, 1))}
+        ${tr('Avg moving (' + spU + ')', fmtNum(sA.avgSpeed, 0), fmtNum(sB.avgSpeed, 0))}
+        ${tr('Max speed (' + spU + ')', fmtNum(sA.maxSpeed, 0), fmtNum(sB.maxSpeed, 0))}
+        ${tr('Max rpm', fmtNum(sA.maxRpm, 0), fmtNum(sB.maxRpm, 0))}
+        ${tr('Max coolant (' + tU + ')', fmtNum(sA.maxCool, 0), fmtNum(sB.maxCool, 0))}
+        ${tr('Min battery (V)', fmtNum(sA.minBat, 1), fmtNum(sB.minBat, 1))}
+        ${tr('Downshifts', cnt(A.meta, /Downshift/), cnt(B.meta, /Downshift/))}
+        ${tr('RPM flares', cnt(A.meta, /flare/), cnt(B.meta, /flare/))}
+        ${tr('Throttle jumps', cnt(A.meta, /^Throttle/), cnt(B.meta, /^Throttle/))}
+        ${tr('Your marks', cnt(A.meta, /^Marked/), cnt(B.meta, /^Marked/))}
+      </table></div>
+      ${trimHtml}
+      <div class="card"><h3>Overlay</h3>
+        ${common.length ? `<div class="chips" id="cmChips">${common.map(c => `<span class="chip${c.k === o.k ? ' on' : ''}" data-k="${c.k}">${esc(c.label)}</span>`).join('')}</div>
+        <canvas id="cmChart" height="220"></canvas>
+        <div class="legend"><span><span class="sw" style="background:var(--acc)"></span>A</span><span><span class="sw" style="background:var(--orange)"></span>B</span><span id="cmUnit"></span></div>
+        <div class="row" style="margin-top:8px"><span class="small dim">Line up at:</span><span class="chip${o.align === 'start' ? ' on' : ''}" data-al="start">start of drive</span><span class="chip${o.align === 'move' ? ' on' : ''}" data-al="move">first movement</span></div>
+        <div class="small dim" style="margin-top:6px">Both drives use the same scale, so you can compare heights directly.</div>` : '<div class="dim">These drives have no sensors in common.</div>'}
+      </div>`;
+    $('cmBack').onclick = () => { openCmp = null; render.drives(); };
+    if (!common.length) return;
+    const moveT = X => { const i = colIdx(X.meta, '0D'); if (i < 0) return X.meta.start; const thr = S.units === 'metric' ? 5 : 3; const r = X.rows.find(r => r[i] != null && r[i] > thr); return r ? r[0] : X.meta.start; };
+    const off = o.align === 'move' ? [moveT(A), moveT(B)] : [A.meta.start, B.meta.start];
+    const line = (X, off0, color, name) => { const ci = colIdx(X.meta, o.k); return { name, color, pts: X.rows.filter(r => r[0] >= off0).map(r => [r[0] - off0, r[ci]]) }; };
+    drawScaleChart($('cmChart'), [line(A, off[0], '#7fb2ff', 'A'), line(B, off[1], '#ffb86b', 'B')], 0, Math.max(A.meta.end - off[0], B.meta.end - off[1], 1000), null, { origin: 0 });
+    const c0 = common.find(c => c.k === o.k); $('cmUnit').textContent = c0 ? c0.label + (c0.unit ? ' (' + c0.unit + ')' : '') : '';
+    $('cmChips').querySelectorAll('.chip').forEach(ch => ch.onclick = () => { o.k = ch.dataset.k; render.compare(); });
+    el.querySelectorAll('[data-al]').forEach(ch => ch.onclick = () => { o.align = ch.dataset.al; render.compare(); });
+  },
   settings() {
     render.devices();
     $('protoSel').value = S.proto;
     $('setScreen').checked = S.screen; $('setUnits').value = S.units; $('setFast').checked = S.fast; $('setDebug').checked = S.debug;
     $('setGears').value = S.gears.join(', '); $('setAxle').value = S.axle; $('setTire').value = S.tire;
     $('setRpmJump').value = S.rpmJump; $('setTpsJump').value = S.tpsJump;
+    $('setAutoConn').checked = S.autoConn; $('setAutoRec').checked = S.autoRec; $('setAutoStop').value = S.autoStopSec;
     render.kVal(); render.pidList();
     $('verVal').textContent = VERSION + (NATIVE ? '' : ' (browser preview)');
   },
@@ -1213,8 +1539,8 @@ const Upd = {
    Wiring
    ===================================================================== */
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => go(b.dataset.p));
-$('connBtn').onclick = () => Conn.state === 'off' ? Conn.start() : Conn.stop('');
-$('recBtn').onclick = () => Rec.on ? Rec.stop() : Rec.start();
+$('connBtn').onclick = () => { if (Conn.state === 'off') { AutoConn.userOff = false; AutoConn.fails = 0; AutoConn.nextAt = 0; Conn.start(); } else { AutoConn.userOff = true; Conn.stop(''); } };
+$('recBtn').onclick = () => { if (Rec.on) { Auto.suppressed = true; Rec.stop(); } else { Auto.suppressed = false; Rec.start(); } render.autoInfo(); };
 $('markBtn').onclick = () => Live.mark();
 $('cruiseBtn').onclick = () => {
   Live.cruise = !Live.cruise; render.conn();
@@ -1231,6 +1557,8 @@ $('btSettingsBtn').onclick = () => NATIVE ? AndroidDL.openBtSettings() : toast('
 $('protoSel').onchange = e => { S.proto = e.target.value; saveSettings(); if (Conn.state !== 'off') toast('Reconnect to use the new protocol'); };
 $('setScreen').onchange = e => { S.screen = e.target.checked; saveSettings(); };
 $('setUnits').onchange = e => { S.units = e.target.value; saveSettings(); Live.min = {}; Live.max = {}; Live.hist = []; if (Conn.state === 'on') render.tiles(); render.pidList(); };
+$('setAutoConn').onchange = e => { S.autoConn = e.target.checked; AutoConn.nextAt = 0; saveSettings(); render.autoInfo(); };
+$('setAutoRec').onchange = e => { S.autoRec = e.target.checked; Auto.reset(); saveSettings(); render.autoInfo(); };
 $('setFast').onchange = e => { S.fast = e.target.checked; Conn.fastOk = true; saveSettings(); };
 $('setDebug').onchange = e => { S.debug = e.target.checked; saveSettings(); if (S.debug) Log.info('Debug log on, app ' + VERSION); };
 $('setGears').onchange = e => {
@@ -1241,7 +1569,7 @@ const numSet = (id, key, lo, hi, resetK) => $(id).onchange = e => {
   const v = parseFloat(e.target.value);
   if (v >= lo && v <= hi) { S[key] = v; if (resetK) S.kLearned = null; saveSettings(); render.kVal(); } else { toast(`Enter a number from ${lo} to ${hi}`); e.target.value = S[key]; }
 };
-numSet('setAxle', 'axle', 2, 7, true); numSet('setTire', 'tire', 20, 45, true); numSet('setRpmJump', 'rpmJump', 150, 3000); numSet('setTpsJump', 'tpsJump', 3, 80);
+numSet('setAxle', 'axle', 2, 7, true); numSet('setTire', 'tire', 20, 45, true); numSet('setRpmJump', 'rpmJump', 150, 3000); numSet('setTpsJump', 'tpsJump', 3, 80); numSet('setAutoStop', 'autoStopSec', 5, 600);
 $('updBtn').onclick = () => Upd.check(true);
 $('viewLogBtn').onclick = () => {
   const lines = Log.all();
@@ -1259,6 +1587,7 @@ setTimeout(() => {
   for (const m of Drives.list()) if (!m.done) { m.done = true; m.interrupted = true; Store.write(m.id + '.json', JSON.stringify(m), false); }
 }, 50);
 render.conn(); render.liveEvents(); $('liveEvCard').style.display = 'none';
+setInterval(() => AutoConn.tick(), 3000);
 if (!NATIVE && !S.device) S.device = 'demo';
 if (NATIVE && Date.now() - (S.lastUpdCheck || 0) > 6 * 3600 * 1000) setTimeout(() => Upd.check(false), 1500);
 window.addEventListener('resize', () => { render.liveChart(); });

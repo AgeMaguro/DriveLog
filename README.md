@@ -9,9 +9,11 @@ On your phone, open **https://github.com/AgeMaguro/DriveLog/releases/download/dr
 
 ## What it does
 - **Live** tab: tiles for every sensor the vehicle reports (RPM, speed, throttle, pedal, load, temps, fuel trims, O2 sensors, MAF, timing, battery voltage...), a 2-minute chart, and a calculated **gear** (RPM / speed).
-- **Record** saves a drive. **Mark** drops a flag when you feel something. **Cruise** lets you note when cruise control is on (OBD2 can't see it).
+- **Record** saves a drive. **Mark** drops a flag when you feel something (tap it afterwards to label it: Hesitation, Surge, Stumble...). **Cruise** lets you note when cruise control is on (OBD2 can't see it).
+- **Automatic** (Settings): connects by itself when it finds your adapter, starts recording when the engine is running, and saves the drive when RPM has read zero for 20 s (changeable). Stopping by hand pauses auto-record until the engine has been turned off.
 - Automatic **events**: downshifts (e.g. "Downshift 4->2 +2600 rpm"), RPM flares where no gear matches (possible transmission slip), and sudden throttle jumps.
-- **Drives** tab: summary, chart with event markers, a gear histogram with **Learn gears from this drive**, and **Share CSV** / **Save to Downloads** (`Downloads/DriveLog/`).
+- **Drives** tab: summary, chart with event markers, a gear histogram with **Learn gears from this drive**, and **Share CSV** / **Save to Downloads** (`Downloads/DriveLog/`). Give a drive a name, tap any event to see all readings at that moment or jump the charts to it, and see **fuel trims** (short and long term) averaged for idle / cruise / accelerating / decelerating.
+- **Compare…** (Drives tab): pick two drives for a side-by-side summary, fuel trims by driving state with the difference, and an overlay chart of any shared sensor on one scale (line them up at the start or at first movement).
 - **Codes** tab: read stored and pending trouble codes, clear codes.
 - **Demo truck** (Settings > Adapter) simulates a drive with a cruise-control downshift, so everything can be tried without an adapter.
 
