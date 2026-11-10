@@ -14,6 +14,15 @@ final class Config {
     double axle = 3.73, tire = 30.0, kLearned = 0, rpmJump = 500, tpsJump = 15;
     int autoStopSec = 20;
     final Map<String, String> pidMode = new HashMap<>();
+    /** The saved vehicle profiles (each has its own gearing). vehicleId is the one chosen in the app. */
+    final java.util.List<Veh> vehicles = new java.util.ArrayList<>();
+    String vehicleId = "";
+
+    static final class Veh {
+        String id = "", name = "", vin = "";
+        double[] gears = {3.06, 1.63, 1.00, 0.70};
+        double axle = 3.73, tire = 30.0, kLearned = 0;
+    }
 
     static Config parse(String json) {
         Map<String, Object> m = Json.parseObject(json);
@@ -43,6 +52,39 @@ final class Config {
         Object pm = m.get("pidMode");
         if (pm instanceof Map) for (Map.Entry<?, ?> e : ((Map<?, ?>) pm).entrySet())
             if (e.getValue() instanceof String) c.pidMode.put(String.valueOf(e.getKey()), (String) e.getValue());
+        c.vehicleId = Json.str(m, "vehicleId", "");
+        Object vs = m.get("vehicles");
+        if (vs instanceof List) for (Object o : (List<?>) vs) {
+            if (!(o instanceof Map)) continue;
+            @SuppressWarnings("unchecked") Map<String, Object> vm = (Map<String, Object>) o;
+            Veh v = new Veh();
+            v.id = Json.str(vm, "id", ""); v.name = Json.str(vm, "name", ""); v.vin = Json.str(vm, "vin", "").toUpperCase();
+            v.axle = Json.d(vm, "axle", 3.73); v.tire = Json.d(vm, "tire", 30.0); v.kLearned = Json.d(vm, "kLearned", 0);
+            Object vg = vm.get("gears");
+            if (vg instanceof List && ((List<?>) vg).size() >= 2) {
+                List<?> l = (List<?>) vg; double[] a = new double[l.size()];
+                for (int i = 0; i < a.length; i++) a[i] = l.get(i) instanceof Number ? ((Number) l.get(i)).doubleValue() : 1;
+                v.gears = a;
+            }
+            c.vehicles.add(v);
+        }
+        return c;
+    }
+
+    /** The profile for this VIN; with no VIN, the one chosen in the app. Null if the VIN is new (or there are no profiles). */
+    Veh vehicleFor(String vin) {
+        if (vin != null && !vin.isEmpty()) { for (Veh v : vehicles) if (vin.equalsIgnoreCase(v.vin)) return v; return null; }
+        for (Veh v : vehicles) if (v.id.equals(vehicleId)) return v;
+        return null;
+    }
+
+    /** A copy that uses this profile's gearing. */
+    Config withVehicle(Veh v) {
+        Config c = new Config();
+        c.device = device; c.proto = proto; c.units = units; c.fast = fast; c.autoConn = autoConn; c.autoRec = autoRec; c.bg = bg; c.debug = debug;
+        c.rpmJump = rpmJump; c.tpsJump = tpsJump; c.autoStopSec = autoStopSec; c.pidMode.putAll(pidMode);
+        c.vehicles.addAll(vehicles); c.vehicleId = vehicleId;
+        c.gears = v.gears; c.axle = v.axle; c.tire = v.tire; c.kLearned = v.kLearned;
         return c;
     }
 

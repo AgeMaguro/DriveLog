@@ -148,6 +148,7 @@ input.full { width:100%; }
 <main>
   <!-- LIVE -->
   <section class="page on" id="p-live">
+    <div id="vehLine" class="small dim" style="margin:0 2px 8px;display:none"></div>
     <div id="updBanner" class="banner" style="display:none"></div>
     <div class="ctrl">
       <button id="recBtn">● Record</button>
@@ -193,6 +194,14 @@ input.full { width:100%; }
 
   <!-- SETTINGS -->
   <section class="page" id="p-settings">
+    <div class="card">
+      <h3>Vehicle</h3>
+      <div class="row" style="gap:8px"><select id="vehSel" style="flex:1;min-width:0"></select><button id="vehAdd">Add…</button></div>
+      <input type="text" class="full" id="vehName" maxlength="40" placeholder="Name this vehicle" style="margin-top:8px">
+      <div class="small dim" id="vehInfo" style="margin-top:6px"></div>
+      <div class="row" style="margin-top:8px"><button id="vehVinBtn" style="display:none">Use the connected vehicle's VIN</button><button class="danger" id="vehDel">Delete</button></div>
+      <div class="hint" style="margin-top:8px">Gear ratios, axle ratio and tire size (below) are saved separately for each vehicle. When the adapter reports a VIN, DriveLog switches to the matching vehicle by itself and tags each drive with it.</div>
+    </div>
     <div class="card">
       <h3>Adapter</h3>
       <div id="devList"></div>
@@ -298,11 +307,12 @@ const DEFAULTS = {
   device: '', deviceName: '', proto: '2', units: 'us', fast: true, screen: true, debug: false,
   gears: [3.06, 1.63, 1.00, 0.70], axle: 3.73, tire: 30.0, kLearned: null,
   rpmJump: 500, tpsJump: 15, pidMode: {}, chart: ['0C', '0D', '11'], lastUpdCheck: 0,
-  autoConn: true, autoRec: true, autoStopSec: 20, bg: true
+  autoConn: true, autoRec: true, autoStopSec: 20, bg: true, vehicles: [], vehicleId: ''
 };
 let S = Object.assign({}, DEFAULTS);
 try { Object.assign(S, JSON.parse(localStorage.getItem(SKEY) || '{}')); } catch (e) { Log.warn('settings unreadable, using defaults'); }
 function saveSettings() {
+  syncVehicle();   // the gear/axle/tire settings belong to the active vehicle
   try { localStorage.setItem(SKEY, JSON.stringify(S)); } catch (e) { Log.err('settings save failed'); }
   if (NATIVE) { try { AndroidDL.setConfig(JSON.stringify(S)); } catch (e) { Log.err('engine settings failed: ' + e); } }   // the background engine keeps its own copy
 }
@@ -924,7 +934,8 @@ const Rec = {
     const cols = [...fast, ...slow];
     const id = 'd' + Date.now();
     this.meta = { id, start: Date.now(), end: Date.now(), rows: 0, cols: cols.map(p => ({ k: p, label: PIDS[p].s, unit: unitOf(p) })), units: S.units,
-      events: [], demo: Elm.transport === DemoTruck, proto: Conn.protoName, k: kFactor(), gears: S.gears.slice(), app: VERSION, auto: !!opts.auto };
+      events: [], demo: Elm.transport === DemoTruck, proto: Conn.protoName, k: kFactor(), gears: S.gears.slice(), app: VERSION, auto: !!opts.auto,
+      vehicle: { id: S.vehicleId, name: (activeVehicle() || {}).name || '', vin: '' } };
     this.buf = []; this.on = true;
     this.engineSeen = (Live.raw['0C'] || 0) >= 400;   // auto-stop only applies once the engine has run during this recording
     Store.write(id + '.rows', '', false);
@@ -1023,7 +1034,7 @@ const Drives = {
     }
     return lines.join('\r\n') + '\r\n';
   },
-  fileName(meta) { const d = new Date(meta.start); return `DriveLog_${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${meta.demo ? '_demo' : ''}.csv`; },
+  fileName(meta) { const d = new Date(meta.start), vn = S.vehicles.length > 1 ? vehLabel(meta).replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '') : ''; return `DriveLog_${vn ? vn + '_' : ''}${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${meta.demo ? '_demo' : ''}.csv`; },
   stats(meta, rows) {
     const ci = k => meta.cols.findIndex(c => c.k === k) + 4;
     const col = k => { const i = ci(k); return i < 4 ? [] : rows.map(r => r[i]).filter(v => v != null); };
@@ -1044,7 +1055,7 @@ const Drives = {
     const r = [];
     for (const row of rows) { const rpm = row[iR], sp = row[iS] == null ? null : row[iS] * toMph; if (rpm != null && sp != null && sp >= 12 && rpm > 600) r.push(rpm / sp); }
     if (r.length < 60) return { error: 'Not enough driving in this log (need at least a minute of moving at 12+ mph).' };
-    const gears = S.gears;
+    const gears = meta.gears && meta.gears.length >= 2 ? meta.gears : S.gears;
     let best = null;
     for (let K = 15; K <= 80; K += 0.1) {
       let hit = 0;
@@ -1325,7 +1336,7 @@ function drawHistogram(cv, ratios, K, gears) {
 /* =====================================================================
    UI rendering
    ===================================================================== */
-let page = 'live', openDrive = null, openCmp = null, cmpMode = false, cmpSel = [];
+let page = 'live', openDrive = null, openCmp = null, cmpMode = false, cmpSel = [], drvFilter = '';
 function go(p) {
   page = p;
   document.querySelectorAll('.page').forEach(x => x.classList.toggle('on', x.id === 'p-' + p));
@@ -1382,7 +1393,7 @@ const render = {
     $('recBtn').classList.toggle('rec', Rec.on);
     $('cruiseBtn').textContent = 'Cruise: ' + (Live.cruise ? 'ON' : 'off');
     $('cruiseBtn').classList.toggle('on', Live.cruise);
-    render.autoInfo();
+    render.autoInfo(); renderVehicle();
     const on = st === 'on';
     $('liveEmpty').style.display = on ? 'none' : '';
     $('liveChartCard').style.display = on ? '' : 'none';
@@ -1448,15 +1459,19 @@ const render = {
     if (openCmp) return render.compare();
     if (openDrive) return render.driveDetail(openDrive);
     $('driveDetail').style.display = 'none'; $('drivesList').style.display = '';
-    const list = Drives.list();
-    if (!list.length) { $('drivesList').innerHTML = '<div class="card empty">No drives yet.<br>Connect and tap <b>● Record</b> on the Live tab, or turn on Record automatically in Settings.</div>'; return; }
+    let list = Drives.list();
+    if (drvFilter && S.vehicles.length > 1) list = list.filter(m => { const p = driveVehicle(m); return p && p.id === drvFilter; });
+    const filterBar = S.vehicles.length > 1 ? `<div class="row" style="margin-bottom:10px"><select id="drvFilter" style="flex:1;min-width:0"><option value="">All vehicles</option>${S.vehicles.map(v => `<option value="${esc(v.id)}"${v.id === drvFilter ? ' selected' : ''}>${esc(v.name)}</option>`).join('')}</select></div>` : '';
+    const bindFilter = () => { const f = $('drvFilter'); if (f) f.onchange = () => { drvFilter = f.value; cmpMode = false; cmpSel = []; render.drives(); }; };
+    if (!list.length) { $('drivesList').innerHTML = filterBar + (drvFilter ? '<div class="card empty">No drives for this vehicle yet.</div>' : '<div class="card empty">No drives yet.<br>Connect and tap <b>● Record</b> on the Live tab, or turn on Record automatically in Settings.</div>'); bindFilter(); return; }
     if (list.length < 2) { cmpMode = false; cmpSel = []; }
     const head = list.length >= 2 ? `<div class="row sp" style="margin-bottom:10px"><span class="dim small">${cmpMode ? (cmpSel.length ? cmpSel.length + ' of 2 picked' : 'Pick two drives to compare') : list.length + ' drives'}</span><span class="row">${cmpMode && cmpSel.length === 2 ? '<button class="pri" id="cmpGo">Compare</button>' : ''}<button id="cmpBtn">${cmpMode ? 'Cancel' : 'Compare…'}</button></span></div>` : '';
-    $('drivesList').innerHTML = head + '<div class="card">' + list.map(m => {
+    $('drivesList').innerHTML = filterBar + head + '<div class="card">' + list.map(m => {
       const d = new Date(m.start), when = d.toLocaleDateString() + ' ' + d.toTimeString().slice(0, 5);
       const picked = cmpSel.indexOf(m.id);
-      return `<div class="drive${picked >= 0 ? ' sel' : ''}" data-id="${m.id}"><div><div>${m.name ? `<b>${esc(m.name)}</b> <span class="dim small">${when}</span>` : when}${m.demo ? ' <span class="dim small">(demo)</span>' : ''}${m.auto ? ' <span class="dim small">(auto)</span>' : ''}${!m.done && !(Rec.meta && Rec.meta.id === m.id) ? ' <span class="dim small">(app closed while recording)</span>' : ''}</div><div class="small dim">${fmtDur(m.end - m.start)} · ${m.rows} rows · ${m.events.length} events</div></div><span class="${picked >= 0 ? '' : 'dim'}">${cmpMode ? (picked >= 0 ? '✓' : '○') : '›'}</span></div>`;
+      return `<div class="drive${picked >= 0 ? ' sel' : ''}" data-id="${m.id}"><div><div>${m.name ? `<b>${esc(m.name)}</b> <span class="dim small">${when}</span>` : when}${S.vehicles.length > 1 && vehLabel(m) ? ` <span class="dim small">· ${esc(vehLabel(m))}</span>` : ''}${m.demo ? ' <span class="dim small">(demo)</span>' : ''}${m.auto ? ' <span class="dim small">(auto)</span>' : ''}${!m.done && !(Rec.meta && Rec.meta.id === m.id) ? ' <span class="dim small">(app closed while recording)</span>' : ''}</div><div class="small dim">${fmtDur(m.end - m.start)} · ${m.rows} rows · ${m.events.length} events</div></div><span class="${picked >= 0 ? '' : 'dim'}">${cmpMode ? (picked >= 0 ? '✓' : '○') : '›'}</span></div>`;
     }).join('') + '</div>';
+    bindFilter();
     $('drivesList').querySelectorAll('.drive').forEach(el => el.onclick = () => {
       const id = el.dataset.id;
       if (cmpMode) { const i = cmpSel.indexOf(id); if (i >= 0) cmpSel.splice(i, 1); else { if (cmpSel.length >= 2) cmpSel.shift(); cmpSel.push(id); } render.drives(); return; }
@@ -1482,7 +1497,7 @@ const render = {
     const el = $('driveDetail'); el.style.display = '';
     const evRows = () => meta.events.length ? meta.events.map((e, i) => `<li class="tap" data-i="${i}"><span class="t">${fmtClock(e.t - meta.start)}</span><span class="${evClass(e.text)}">${esc(e.text)}</span>${e.label ? `<span class="lbl">${esc(e.label)}</span>` : ''}</li>`).join('') : '<li class="dim">No events in this drive.</li>';
     el.innerHTML = `
-      <div class="row sp" style="margin-bottom:10px"><button id="ddBack">‹ Drives</button><span class="dim small">${d.toLocaleDateString()} ${d.toTimeString().slice(0, 5)}${meta.demo ? ' (demo)' : ''}${meta.auto ? ' (auto)' : ''}</span></div>
+      <div class="row sp" style="margin-bottom:10px"><button id="ddBack">‹ Drives</button><span class="dim small">${vehLabel(meta) ? esc(vehLabel(meta)) + ' · ' : ''}${d.toLocaleDateString()} ${d.toTimeString().slice(0, 5)}${meta.demo ? ' (demo)' : ''}${meta.auto ? ' (auto)' : ''}</span></div>
       <div class="card"><input type="text" class="full" id="ddName" maxlength="50" placeholder="Name this drive (e.g. before new MAF sensor)" value="${esc(meta.name || '')}" style="margin-bottom:10px"><div class="stats">
         <div><b>${fmtDur(st.dur)}</b><span>duration</span></div>
         <div><b>${fmtNum(st.dist, 1)}</b><span>${dU}</span></div>
@@ -1549,13 +1564,14 @@ const render = {
         const res = Drives.learn(meta, rows);
         if (!res) { $('ddLearnOut').textContent = 'This drive has no RPM and speed columns.'; return; }
         if (res.error) { $('ddLearnOut').textContent = res.error; return; }
-        const axle = res.K * S.tire / 336.13;
+        const dv = driveVehicle(meta), tireIn = dv ? dv.tire : S.tire;
+        const axle = res.K * tireIn / 336.13;
         const okShare = res.share >= 0.6;
         $('ddLearnOut').innerHTML = `Best fit: <b>${res.K} rpm per mph</b> in a 1:1 gear, matching ${Math.round(res.share * 100)}% of ${res.samples} moving readings.` +
-          ` With ${S.tire}" tires that's about a <b>${axle.toFixed(2)}</b> axle ratio.` + (okShare ? '' : '<br><span style="color:var(--orange)">Low match: the gear ratios in Settings may not fit this truck, or the drive had lots of shifting.</span>');
-        drawHistogram($('ddHist'), res.ratios, res.K, S.gears);
+          ` With ${tireIn}" tires that's about a <b>${axle.toFixed(2)}</b> axle ratio.` + (okShare ? '' : '<br><span style="color:var(--orange)">Low match: the gear ratios in Settings may not fit this truck, or the drive had lots of shifting.</span>');
+        drawHistogram($('ddHist'), res.ratios, res.K, meta.gears && meta.gears.length >= 2 ? meta.gears : S.gears);
         const b = document.createElement('button'); b.className = 'pri'; b.textContent = 'Use this'; b.style.marginLeft = '8px';
-        b.onclick = () => { S.kLearned = res.K; saveSettings(); toast('Gear calculation updated'); render.driveDetail(id); };
+        b.onclick = () => { if (dv && dv.id !== S.vehicleId) dv.kLearned = res.K; else S.kLearned = res.K; saveSettings(); toast('Gear calculation updated' + (dv ? ' for ' + dv.name : '')); render.driveDetail(id); };
         $('ddLearn').after(b);
       }, 30);
     };
@@ -1587,6 +1603,7 @@ const render = {
     const el = $('driveDetail'); el.style.display = '';
     el.innerHTML = `
       <div class="row sp" style="margin-bottom:10px"><button id="cmBack">‹ Drives</button><span class="dim small">A is the older drive</span></div>
+      ${vehLabel(A.meta) && vehLabel(B.meta) && vehLabel(A.meta) !== vehLabel(B.meta) ? `<div class="hint" style="margin-bottom:10px;color:var(--orange)">These drives are from different vehicles (${esc(vehLabel(A.meta))} and ${esc(vehLabel(B.meta))}), so differences may be the vehicles, not a repair.</div>` : ''}
       <div class="card"><table class="cmp">
         <tr><th></th><th class="a">A<div class="small dim" style="font-weight:400">${title(A.meta)}</div></th><th class="b">B<div class="small dim" style="font-weight:400">${title(B.meta)}</div></th></tr>
         ${tr('Duration', fmtDur(sA.dur), fmtDur(sB.dur))}
@@ -1626,7 +1643,7 @@ const render = {
     $('setGears').value = S.gears.join(', '); $('setAxle').value = S.axle; $('setTire').value = S.tire;
     $('setRpmJump').value = S.rpmJump; $('setTpsJump').value = S.tpsJump;
     $('setAutoConn').checked = S.autoConn; $('setBg').checked = S.bg !== false; $('setAutoRec').checked = S.autoRec; $('setAutoStop').value = S.autoStopSec;
-    render.kVal(); render.pidList();
+    render.kVal(); render.pidList(); renderVehicle();
     $('verVal').textContent = VERSION + (NATIVE ? '' : ' (browser preview)');
   },
   kVal() { $('kVal').textContent = kFactor().toFixed(1) + (S.kLearned ? ' (learned)' : ''); },
@@ -1717,6 +1734,105 @@ const Upd = {
 };
 
 /* =====================================================================
+   Vehicles: one profile per vehicle (name, VIN, gear ratios, axle, tires). S.gears/axle/tire/kLearned always hold the
+   ACTIVE vehicle's values; saveSettings() copies them back into its profile. The engine gets all profiles and picks
+   the one whose VIN the vehicle reports (so drives are right even when the page is closed).
+   ===================================================================== */
+const WMI = { '1GC': 'Chevrolet', '1GB': 'Chevrolet', '1G1': 'Chevrolet', '1GN': 'Chevrolet', '2GC': 'Chevrolet', '3GC': 'Chevrolet', '2G1': 'Chevrolet', '1GT': 'GMC', '1GK': 'GMC', '1G2': 'Pontiac', '2G2': 'Pontiac', '1G6': 'Cadillac', '1GY': 'Cadillac',
+  '1FA': 'Ford', '1FT': 'Ford', '1FM': 'Ford', '1FD': 'Ford', '1FB': 'Ford', '3FA': 'Ford', '1C3': 'Chrysler', '1C4': 'Chrysler', '1C6': 'Ram', '1D7': 'Dodge', '1B7': 'Dodge', '1J4': 'Jeep',
+  '1HG': 'Honda', '2HG': 'Honda', 'JHM': 'Honda', '5J6': 'Honda', '1N4': 'Nissan', 'JN1': 'Nissan', '5N1': 'Nissan', 'JT2': 'Toyota', '4T1': 'Toyota', '5TD': 'Toyota', '5TF': 'Toyota', 'JTD': 'Toyota', '2T1': 'Toyota',
+  '3VW': 'Volkswagen', 'WVW': 'Volkswagen', 'WBA': 'BMW', 'WDD': 'Mercedes-Benz', '5YJ': 'Tesla', 'KMH': 'Hyundai', '5NP': 'Hyundai', 'KNA': 'Kia', 'JF1': 'Subaru', '4S3': 'Subaru', 'JM1': 'Mazda', '1YV': 'Mazda' };
+// Offline guess from the VIN itself (make from the first 3 characters, model year from the 10th). The model needs the online lookup.
+function vinGuess(vin) {
+  if (!vin || vin.length !== 17) return { make: '', year: 0, text: '' };
+  const make = WMI[vin.slice(0, 3)] || '';
+  const L = 'ABCDEFGHJKLMNPRSTVWXY', c = vin[9];
+  let year = 0;
+  if (/[1-9]/.test(c)) year = 2000 + +c;
+  else if (L.includes(c)) { year = (/[A-Z]/.test(vin[6]) ? 2010 : 1980) + L.indexOf(c); if (year > new Date().getFullYear() + 1) year -= 30; }
+  return { make, year, text: [year || '', make].filter(Boolean).join(' ') };
+}
+const tcase = x => (x || '').length <= 3 ? (x || '').toUpperCase() : (x || '').toLowerCase().replace(/\b\w/g, ch => ch.toUpperCase());
+let vehSeq = 0;
+const newVehId = () => 'v' + Date.now().toString(36) + (++vehSeq);
+const GENERIC_NAMES = ['My vehicle', 'New vehicle'];
+function vehicleById(id) { return (S.vehicles || []).find(v => v.id === id); }
+function activeVehicle() { return vehicleById(S.vehicleId); }
+function syncVehicle() { const v = activeVehicle(); if (v) { v.gears = S.gears.slice(); v.axle = S.axle; v.tire = S.tire; v.kLearned = S.kLearned || null; } }
+function ensureVehicles() {
+  if (!Array.isArray(S.vehicles) || !S.vehicles.length) {   // first run of this version: your current settings become the first vehicle
+    S.vehicles = [{ id: newVehId(), name: 'My vehicle', autoName: true, vin: '', gears: S.gears.slice(), axle: S.axle, tire: S.tire, kLearned: S.kLearned || null }];
+    S.vehicleId = S.vehicles[0].id;
+  } else if (!activeVehicle()) useVehicle(S.vehicles[0].id, true);
+}
+function refreshSettingsPage() { if (typeof page !== 'undefined' && page === 'settings') render.settings(); }
+function useVehicle(id, quiet) {
+  syncVehicle();
+  const v = vehicleById(id); if (!v) return;
+  S.vehicleId = id; S.gears = v.gears.slice(); S.axle = v.axle; S.tire = v.tire; S.kLearned = v.kLearned || null;
+  Live.min = {}; Live.max = {}; Live.hist = [];
+  saveSettings(); refreshSettingsPage(); renderVehicle();
+  if (!quiet) toast('Vehicle: ' + v.name);
+}
+function addVehicle(o) {
+  syncVehicle();
+  const v = { id: newVehId(), name: o.name || 'New vehicle', autoName: !!o.autoName, vin: o.vin || '', gears: DEFAULTS.gears.slice(), axle: DEFAULTS.axle, tire: DEFAULTS.tire, kLearned: null };
+  S.vehicles.push(v);
+  useVehicle(v.id, true);
+  if (v.vin) requestDecode(v.vin);
+  return v;
+}
+let curVin = '', vinSeen = '';
+const vinDismissed = new Set();
+function requestDecode(vin) {
+  const g = vinGuess(vin), v = S.vehicles.find(x => x.vin === vin);
+  if (v && v.autoName && GENERIC_NAMES.includes(v.name) && g.text) { v.name = g.text; saveSettings(); renderVehicle(); }
+  if (NATIVE) { try { AndroidDL.decodeVin(vin); } catch (e) {} }
+  else if (window.fetch) fetch('https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues/' + vin + '?format=json').then(r => r.json()).then(j => DLNative.onVinDecoded(vin, (j.Results || [])[0] || null)).catch(() => {});
+}
+DLNative.onVinDecoded = (vin, r) => {
+  const v = S.vehicles.find(x => x.vin === vin);
+  if (!v || !r || !r.Make) return;
+  v.info = { make: tcase(r.Make), model: r.Model || '', year: r.ModelYear || '', engine: [r.DisplacementL ? (+r.DisplacementL).toFixed(1) + ' L' : '', r.EngineCylinders ? r.EngineCylinders + ' cyl' : ''].filter(Boolean).join(' ') };
+  if (v.autoName) v.name = [v.info.year, v.info.make, v.info.model].filter(Boolean).join(' ') || v.name;
+  saveSettings(); renderVehicle(); refreshSettingsPage();
+};
+// The adapter reported a VIN: switch to that vehicle, claim an unnamed profile, or offer to add a new one.
+function onVehicleVin(vin) {
+  curVin = vin || '';
+  renderVehicle();
+  if (!vin || vin === vinSeen) return;
+  vinSeen = vin;
+  const known = S.vehicles.find(v => v.vin === vin);
+  if (known) { if (known.id !== S.vehicleId) useVehicle(known.id); if (!known.info) requestDecode(vin); return; }
+  const free = S.vehicles.filter(v => !v.vin);
+  if (S.vehicles.length === 1 && free.length === 1) {   // upgrading with one vehicle: that is this one
+    free[0].vin = vin; saveSettings(); requestDecode(vin); renderVehicle(); toast('Vehicle linked: ' + free[0].name); return;
+  }
+  if (vinDismissed.has(vin)) return;
+  const g = vinGuess(vin), act = activeVehicle();
+  popup('New vehicle detected', `<p style="margin:0 0 4px"><b>${esc(g.text || 'Unknown make')}</b></p><div class="small dim" style="margin-bottom:8px">VIN ${esc(vin)}</div>
+    <p class="small" style="margin:0">DriveLog keeps separate gear ratios, axle ratio and tire size for each vehicle. ${act && !act.vin ? `If this is <b>${esc(act.name)}</b>, link the VIN to it. Otherwise add it as a new vehicle.` : 'Add it as a new vehicle?'}</p>`,
+    [['Cancel', () => vinDismissed.add(vin)], ...(act && !act.vin ? [["It's " + act.name.slice(0, 24), () => { act.vin = vin; saveSettings(); requestDecode(vin); renderVehicle(); refreshSettingsPage(); toast('VIN linked to ' + act.name); }]] : []),
+     ['Add new vehicle', () => { addVehicle({ vin, name: g.text || 'New vehicle', autoName: true }); toast('Added. Set its gear ratios, axle ratio and tire size in Settings.', 5000); }]]);
+}
+// Which saved profile a drive belongs to (by id, else by VIN); null for drives from before profiles existed.
+function driveVehicle(m) { const x = m && m.vehicle; if (!x) return null; return (x.id && vehicleById(x.id)) || (x.vin && S.vehicles.find(v => v.vin === x.vin)) || null; }
+function vehLabel(m) { const x = m && m.vehicle; if (!x) return ''; const p = driveVehicle(m); return p ? p.name : (x.name || (x.vin ? 'VIN …' + x.vin.slice(-6) : '')); }
+function renderVehicle() {
+  const a = activeVehicle();
+  const line = $('vehLine');
+  if (line) { const show = a && (S.vehicles.length > 1 || a.vin || Conn.state === 'on'); line.style.display = show ? '' : 'none'; if (show) line.textContent = 'Vehicle: ' + a.name + (Conn.state === 'on' && curVin && a.vin !== curVin ? ' (connected vehicle is not linked to it)' : ''); }
+  const sel = $('vehSel'); if (!sel || !a) return;
+  sel.innerHTML = S.vehicles.map(v => `<option value="${esc(v.id)}"${v.id === a.id ? ' selected' : ''}>${esc(v.name)}</option>`).join('');
+  if (document.activeElement !== $('vehName')) $('vehName').value = a.name;
+  const i = a.info;
+  $('vehInfo').textContent = a.vin ? `VIN ${a.vin}${i ? ' · ' + [i.year, i.make, i.model].filter(Boolean).join(' ') + (i.engine ? ' · ' + i.engine : '') : ''}` : 'No VIN yet. It is read when you connect (some older vehicles do not report one).';
+  $('vehVinBtn').style.display = curVin && !a.vin && Conn.state === 'on' ? '' : 'none';
+  $('vehDel').style.display = S.vehicles.length > 1 ? '' : 'none';
+}
+
+/* =====================================================================
    Android engine mirror. On Android the Java engine (running in a foreground service) owns the Bluetooth link,
    polling, event detection and recording. This page only shows what it pushes and sends it commands.
    ===================================================================== */
@@ -1746,6 +1862,7 @@ const Mirror = {
     const wantScreen = Rec.on && !!S.screen;
     if (wantScreen !== this.screenOn) { this.screenOn = wantScreen; try { AndroidDL.keepScreenOn(wantScreen); } catch (e) {} }
     this.prevConn = st.conn;
+    if (st.conn === 'on') onVehicleVin(st.vin || ''); else if (prev === 'on') { vinSeen = ''; curVin = ''; renderVehicle(); }
     if (st.conn === 'on' && prev !== 'on') {   // just connected (or the page just opened on a connected truck)
       render.conn(); render.tiles(); render.pidList(); render.truckInfo();
     } else if (st.conn !== 'on' && prev === 'on') {
@@ -1817,6 +1934,16 @@ $('cruiseBtn').onclick = () => {
 $('readCodesBtn').onclick = readCodes;
 $('clearCodesBtn').onclick = clearCodes;
 $('refreshDevBtn').onclick = () => render.devices();
+$('vehSel').onchange = e => useVehicle(e.target.value);
+$('vehName').onchange = e => { const a = activeVehicle(), v = e.target.value.trim(); if (a && v) { a.name = v; a.autoName = false; saveSettings(); renderVehicle(); } else if (a) e.target.value = a.name; };
+$('vehAdd').onclick = () => popup('Add a vehicle', `<p class="small dim" style="margin:0 0 8px">It starts with the default gear ratios; set its own in Settings afterwards.${curVin && !S.vehicles.some(v => v.vin === curVin) ? ' The connected vehicle\'s VIN will be linked to it.' : ''}</p><input type="text" class="full" id="vehNewName" maxlength="40" placeholder="Name (e.g. Wife's Civic)">`,
+  [['Cancel'], ['Add', () => { const n = $('vehNewName').value.trim(); const vin = curVin && !S.vehicles.some(v => v.vin === curVin) ? curVin : ''; addVehicle({ vin, name: n || 'New vehicle', autoName: !n }); }]]);
+$('vehVinBtn').onclick = () => { const a = activeVehicle(); if (a && curVin) { a.vin = curVin; saveSettings(); requestDecode(curVin); renderVehicle(); toast('VIN linked to ' + a.name); } };
+$('vehDel').onclick = () => {
+  const a = activeVehicle(); if (!a || S.vehicles.length < 2) return toast('Keep at least one vehicle');
+  popup('Delete ' + a.name + '?', '<p class="small" style="margin:0">Its saved drives stay in the Drives tab. Only this vehicle\'s gear settings are removed.</p>',
+    [['Cancel'], ['Delete', () => { S.vehicles = S.vehicles.filter(v => v.id !== a.id); S.vehicleId = ''; useVehicle(S.vehicles[0].id, true); toast('Deleted ' + a.name); }, 'danger']]);
+};
 $('btSettingsBtn').onclick = () => NATIVE ? AndroidDL.openBtSettings() : toast('Opens Bluetooth settings in the Android app');
 $('protoSel').onchange = e => { S.proto = e.target.value; saveSettings(); if (Conn.state !== 'off') toast('Reconnect to use the new protocol'); };
 $('setScreen').onchange = e => { S.screen = e.target.checked; saveSettings(); };
@@ -1854,6 +1981,7 @@ if (!NATIVE) setTimeout(() => {   // (on Android the engine does this when it st
 render.conn(); render.liveEvents(); $('liveEvCard').style.display = 'none';
 if (!NATIVE) setInterval(() => AutoConn.tick(), 3000);
 if (!NATIVE && !S.device) S.device = 'demo';
+ensureVehicles(); renderVehicle();
 if (NATIVE) { saveSettings(); Mirror.snapshot(); }   // hand the engine our settings, then show what it is doing right now
 if (NATIVE && Date.now() - (S.lastUpdCheck || 0) > 6 * 3600 * 1000) setTimeout(() => Upd.check(false), 1500);
 window.addEventListener('resize', () => { render.liveChart(); });

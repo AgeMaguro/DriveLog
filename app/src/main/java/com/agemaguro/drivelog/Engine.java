@@ -58,6 +58,8 @@ final class Engine {
     private final Elm elm = new Elm();
 
     private volatile Config cfg = new Config();
+    private volatile String vin = "";
+    private volatile Config effCfg;   // cfg with the gearing of the vehicle that is connected (cached)
     private volatile boolean stop = true;
     private Thread thread;
 
@@ -133,7 +135,7 @@ final class Engine {
     void setConfig(String json) {
         Config old = cfg;
         Config n = Config.parse(json);
-        cfg = n;
+        cfg = n; effCfg = null;
         if ((!old.autoConn && n.autoConn) || !old.device.equals(n.device)) { autoFails = 0; nextAuto = 0; }
         if (old.autoRec != n.autoRec) resetAuto();
         pushState();
@@ -141,6 +143,17 @@ final class Engine {
     }
 
     Config config() { return cfg; }
+
+    /** Settings with the connected vehicle's own gears, axle and tires. */
+    private Config effective() {
+        Config e = effCfg;
+        if (e != null) return e;
+        Config c = cfg;
+        Config.Veh v = c.vehicleFor(vin);
+        e = v == null ? c : c.withVehicle(v);
+        effCfg = e;
+        return e;
+    }
 
     // ================================================================= commands from the page (any thread)
 
@@ -220,6 +233,9 @@ final class Engine {
             m.put("suppressed", suppressed);
             m.put("userOff", userOff);
             m.put("cruise", cruise);
+            m.put("vin", vin);
+            Config.Veh sv = cfg.vehicleFor(vin);
+            m.put("vehicleId", sv == null ? "" : sv.id);
             m.put("waiting", conn.equals("off") && eligibleAuto(cfg));
             m.put("running", isRunning());
             return Json.stringify(m);
@@ -408,6 +424,11 @@ final class Engine {
         }
         if (aborted()) return 2;
         protoName = tx("ATDP", 1500).replaceFirst("(?i)^AUTO,\\s*", "");
+        if (!aborted()) {   // which vehicle is this? (mode 09 PID 02; many older vehicles don't answer, which is fine)
+            vin = Elm.parseVin(tx("0902", 5000));
+            effCfg = null;
+            host.log("VIN: " + (vin.isEmpty() ? "(not reported)" : vin));
+        }
         supported = sup;
         host.log("supported: " + new ArrayList<>(sup));
         return 0;
@@ -435,6 +456,7 @@ final class Engine {
         if (recOn) recStop(null);
         elm.abort();
         closeTransport();
+        vin = ""; effCfg = null;
         setConn("off", statusText.isEmpty() ? "Not connected" : statusText, statusText.isEmpty() ? "" : "bad");
     }
 
@@ -513,7 +535,7 @@ final class Engine {
 
     Gear gearFor(double rpm, Double mph) {
         if (mph == null || mph < 8 || rpm < 500) return new Gear(null, null);
-        Config c = cfg;
+        Config c = effective();
         double r = rpm / mph, K = c.k();
         int pick = -1;
         for (int i = 0; i < c.gears.length; i++) {
@@ -699,7 +721,7 @@ final class Engine {
     private void recStart(boolean auto) {
         if (!conn.equals("on")) { if (!auto) host.onNotice("toast", "Connect first"); return; }
         if (recOn) return;
-        Config c = cfg;
+        Config c = effective();
         List<Pids.Pid> cols = new ArrayList<>(plan(true));
         cols.addAll(plan(false));
         String id = "d" + System.currentTimeMillis();
@@ -723,6 +745,12 @@ final class Engine {
         m.put("proto", protoName);
         m.put("k", c.k());
         m.put("gears", c.gears.clone());
+        Config.Veh rv = cfg.vehicleFor(vin);
+        Map<String, Object> vm = new LinkedHashMap<>();
+        vm.put("id", rv == null ? "" : rv.id);
+        vm.put("name", rv == null ? "" : rv.name);
+        vm.put("vin", vin);
+        m.put("vehicle", vm);
         m.put("app", appVersion);
         m.put("auto", auto);
         synchronized (lock) {

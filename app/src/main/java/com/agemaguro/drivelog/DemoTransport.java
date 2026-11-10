@@ -118,6 +118,17 @@ final class DemoTransport implements Transport {
             case "03": return hex(0x43, 0x01, 0x71, 0x04, 0x20, 0, 0);
             case "07": return hex(0x47, 0x03, 0x00, 0, 0, 0, 0);
             case "04": return "44";
+            case "0902": {   // J1850-style: five frames of 4 bytes, 3 pad bytes then the 17 characters
+                String v = "1GCCS196858123456";
+                StringBuilder b = new StringBuilder();
+                for (int f = 0; f < 5; f++) {
+                    int[] d = new int[7]; d[0] = 0x49; d[1] = 0x02; d[2] = f + 1;
+                    for (int k = 0; k < 4; k++) { int idx = f * 4 + k - 3; d[3 + k] = idx < 0 ? 0 : v.charAt(idx); }
+                    if (f > 0) b.append('\r');
+                    b.append(hex(d));
+                }
+                return b.toString();
+            }
             default:
         }
         if (cmd.startsWith("AT")) return "OK";

@@ -409,6 +409,31 @@ public class MainActivity extends Activity {
             }, "update-check").start();
         }
 
+        /** Looks the VIN up in the free US NHTSA database (make, model, year, engine). The page gets the answer in DLNative.onVinDecoded. */
+        @JavascriptInterface public void decodeVin(final String vin) {
+            if (vin == null || !vin.matches("[A-HJ-NPR-Z0-9]{17}")) return;
+            new Thread(() -> {
+                try {
+                    HttpURLConnection c = (HttpURLConnection) new URL("https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues/" + vin + "?format=json").openConnection();
+                    c.setConnectTimeout(8000);
+                    c.setReadTimeout(8000);
+                    if (c.getResponseCode() != 200) throw new IOException("HTTP " + c.getResponseCode());
+                    StringBuilder sb = new StringBuilder();
+                    try (BufferedReader br = new BufferedReader(new InputStreamReader(c.getInputStream(), StandardCharsets.UTF_8))) {
+                        String line;
+                        while ((line = br.readLine()) != null) sb.append(line);
+                    }
+                    JSONObject r = new JSONObject(sb.toString()).getJSONArray("Results").getJSONObject(0);
+                    JSONObject out = new JSONObject();
+                    for (String k : new String[]{"Make", "Model", "ModelYear", "DisplacementL", "EngineCylinders", "BodyClass", "Trim"}) out.put(k, r.optString(k, ""));
+                    js("DLNative.onVinDecoded(" + q(vin) + "," + out + ")");
+                } catch (Exception e) {
+                    Log.w(TAG, "decodeVin: " + e);
+                    js("DLNative.onVinDecoded(" + q(vin) + ",null)");
+                }
+            }, "vin-decode").start();
+        }
+
         @JavascriptInterface public void installUpdate() { runOnUiThread(MainActivity.this::startUpdateDownload); }
     }
 

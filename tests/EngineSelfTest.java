@@ -74,6 +74,8 @@ public class EngineSelfTest {
         check("auto-connects by itself", waitFor(e::isConnected, 15000));
         check("auto-record starts once the engine runs", waitFor(e::isRecording, 10000));
         check("state says auto recording", Boolean.TRUE.equals(((Map<?, ?>) state(e).get("rec")).get("auto")));
+        Map<String, Object> st0 = state(e);
+        check("VIN read from the vehicle", "1GCCS196858123456".equals(st0.get("vin")));
         check("samples are pushed while the page is open", waitFor(() -> h.samples > 10, 5000));
         Thread.sleep(3000);
         e.markRequest();
@@ -128,8 +130,50 @@ public class EngineSelfTest {
         boolean markRow = false;
         for (String r : rows) if (r.contains("\"Marked (")) markRow = true;
         check("mark row written", markRow);
+        Map<?, ?> vm = (Map<?, ?>) m.get("vehicle");
+        check("drive is tagged with the VIN", vm != null && "1GCCS196858123456".equals(vm.get("vin")));
         check("meta units/cols match the page's format", "us".equals(m.get("units")) && ((Map<?, ?>) cols.get(0)).containsKey("label") && ((Map<?, ?>) cols.get(0)).containsKey("unit"));
         System.out.println("     events: " + evs.size() + ", rows: " + rows.length + ", first col: " + cols.get(0));
+    }
+
+    static void vehicles() throws Exception {
+        System.out.println("vehicles: profile chosen by VIN, own gearing");
+        // parser checks (J1850 frames, CAN multi-line, noise)
+        check("parseVin J1850", "1GCCS196858123456".equals(Elm.parseVin("49 02 01 00 00 00 31\n49 02 02 47 43 43 53\n49 02 03 31 39 36 38\n49 02 04 35 38 31 32\n49 02 05 33 34 35 36")));
+        check("parseVin CAN", "WVWZZZ1JZ3W386752".equals(Elm.parseVin("014\n0: 49 02 01 57 56 57\n1: 5A 5A 5A 31 4A 5A 33\n2: 57 33 38 36 37 35 32")));
+        check("parseVin NO DATA", "".equals(Elm.parseVin("NO DATA")));
+        TestHost h = new TestHost();
+        h.factory = () -> { DemoTransport d = new DemoTransport(); d.timeScale = 4; return d; };
+        File dir = tmp();
+        Engine e = new Engine(new FileStore(dir), h, "test");
+        String cfgJson = "{\"device\":\"AA:BB\",\"autoRec\":true,\"autoStopSec\":5,\"gears\":[3.06,1.63,1.0,0.7],\"axle\":3.73,\"tire\":30,"
+            + "\"vehicleId\":\"v1\",\"vehicles\":[{\"id\":\"v1\",\"name\":\"Other car\",\"vin\":\"\",\"gears\":[2.5,1.5,1.0,0.8],\"axle\":3.4,\"tire\":28},"
+            + "{\"id\":\"v2\",\"name\":\"My truck\",\"vin\":\"1GCCS196858123456\",\"gears\":[3.06,1.63,1.0,0.7],\"axle\":3.73,\"tire\":30}]}";
+        e.setConfig(cfgJson);
+        e.start();
+        check("connects", waitFor(e::isConnected, 15000));
+        check("state names the matching profile", "v2".equals(state(e).get("vehicleId")));
+        check("records", waitFor(e::isRecording, 10000));
+        e.recStopRequest();
+        check("stopped", waitFor(() -> !e.isRecording(), 3000));
+        e.shutdown();
+        FileStore st = new FileStore(dir);
+        String metaName = null;
+        for (String n : st.list()) if (n.endsWith(".json")) metaName = n;
+        Map<String, Object> m = Json.parseObject(st.read(metaName));
+        Map<?, ?> vm = (Map<?, ?>) m.get("vehicle");
+        check("drive tagged with profile id and name", vm != null && "v2".equals(vm.get("id")) && "My truck".equals(vm.get("name")));
+        check("drive uses that profile's gearing, not the app's chosen one", Math.abs(((Number) m.get("k")).doubleValue() - 336.13 * 3.73 / 30.0) < 1e-6);
+        // unknown VIN: tagged by VIN only
+        TestHost h2 = new TestHost();
+        h2.factory = h.factory;
+        File dir2 = tmp();
+        Engine e2 = new Engine(new FileStore(dir2), h2, "test");
+        e2.setConfig(cfgJson.replace("1GCCS196858123456", "1GCCS196858999999"));
+        e2.start();
+        check("connects (unknown VIN)", waitFor(e2::isConnected, 15000));
+        check("no profile matched", "".equals(state(e2).get("vehicleId")) && "1GCCS196858123456".equals(state(e2).get("vin")));
+        e2.shutdown();
     }
 
     static void retry() throws Exception {
@@ -220,6 +264,7 @@ public class EngineSelfTest {
     public static void main(String[] a) throws Exception {
         String which = a.length > 0 ? a[0] : "all";
         if (which.equals("all") || which.equals("drive")) drive();
+        if (which.equals("all") || which.equals("vehicles")) vehicles();
         if (which.equals("all") || which.equals("retry")) retry();
         if (which.equals("all") || which.equals("control")) control();
         if (which.equals("all") || which.equals("silent")) silent();

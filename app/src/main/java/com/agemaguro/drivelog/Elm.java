@@ -99,4 +99,28 @@ final class Elm {
         }
         return null;
     }
+
+    /** Pulls the 17-character VIN out of the answer to "0902" (J1850 frames "49 02 01 ..", or CAN lines "0: 49 02 01 ..."). Empty if there isn't one. */
+    static String parseVin(String resp) {
+        if (resp == null) return "";
+        StringBuilder hex = new StringBuilder();
+        boolean prefixed = false;
+        for (String raw : resp.split("\n")) {
+            String l = raw.replaceAll("\\s", "").toUpperCase();
+            if (l.matches("^[0-9A-F]:.*")) { prefixed = true; l = l.substring(2); }
+            else if (l.matches("^[0-9A-F]{3}$")) continue;            // CAN byte-count line, e.g. "014"
+            if (l.startsWith("4902")) l = l.length() > 6 ? l.substring(6) : "";   // skip "49 02 <frame no>"
+            else if (!prefixed) continue;
+            if (!l.matches("[0-9A-F]*")) continue;
+            hex.append(l);
+        }
+        StringBuilder a = new StringBuilder();
+        for (int i = 0; i + 1 < hex.length(); i += 2) {
+            int v = Integer.parseInt(hex.substring(i, i + 2), 16);
+            if ((v >= '0' && v <= '9') || (v >= 'A' && v <= 'Z')) a.append((char) v);
+        }
+        if (a.length() < 17) return "";
+        String vin = a.substring(a.length() - 17);
+        return vin.matches("[A-HJ-NPR-Z0-9]{17}") ? vin : "";
+    }
 }
