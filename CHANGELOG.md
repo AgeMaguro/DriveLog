@@ -1,5 +1,8 @@
 # DriveLog changelog
 
+## 1.0.7 (2026-11-09)
+- **Quieter background notification:** Settings > Automatic > Background notification: Normal (quiet, with a status-bar icon) or Minimal (no status-bar icon, collapsed, hidden on the lock screen). "Notification settings…" opens Android's page for it, where you can also turn the notification off completely; logging keeps running either way (Android lists it under running apps).
+
 ## 1.0.6 (2026-11-09)
 - **Vehicle profiles and VIN:** on connect DriveLog asks the vehicle for its VIN (many older vehicles don't report one; that's fine). Each vehicle has its own profile (name, VIN, gear ratios, axle ratio, tire size, learned gearing). When the VIN matches a saved vehicle DriveLog switches to it by itself, also in the background with the app closed; each drive is tagged with the vehicle. A new VIN asks whether to add a new vehicle (or link the VIN to the one you have). Your existing settings become your first vehicle, linked to the first VIN it sees.
 - Settings > Vehicle: pick, name, add, delete vehicles. Make, model, year and engine come from the free US NHTSA VIN lookup (needs internet once; the make and year are also worked out offline).

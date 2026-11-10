@@ -315,6 +315,21 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface public String engineLog() { return host.logText(); }
 
+        /** Opens Android's own settings page for the logging notification (sound, banner, lock screen, or hide it completely). */
+        @JavascriptInterface public void openNotificationSettings() {
+            runOnUiThread(() -> {
+                try {
+                    LogService.ensureChannels(MainActivity.this);
+                    Intent i = new Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                            .putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName())
+                            .putExtra(Settings.EXTRA_CHANNEL_ID, LogService.channelFor(host.engine.config()));
+                    startActivity(i);
+                } catch (Exception e) {
+                    try { startActivity(new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName())); } catch (Exception ignored) { }
+                }
+            });
+        }
+
         @JavascriptInterface public void openBtSettings() {
             runOnUiThread(() -> {
                 try { startActivity(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS)); } catch (Exception ignored) { }

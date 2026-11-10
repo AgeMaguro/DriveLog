@@ -17,6 +17,8 @@ final class Config {
     /** The saved vehicle profiles (each has its own gearing). vehicleId is the one chosen in the app. */
     final java.util.List<Veh> vehicles = new java.util.ArrayList<>();
     String vehicleId = "";
+    /** "normal" (quiet notification with a status-bar icon) or "minimal" (no status-bar icon, hidden on the lock screen). */
+    String notif = "normal";
 
     static final class Veh {
         String id = "", name = "", vin = "";
@@ -53,6 +55,7 @@ final class Config {
         if (pm instanceof Map) for (Map.Entry<?, ?> e : ((Map<?, ?>) pm).entrySet())
             if (e.getValue() instanceof String) c.pidMode.put(String.valueOf(e.getKey()), (String) e.getValue());
         c.vehicleId = Json.str(m, "vehicleId", "");
+        c.notif = "minimal".equals(Json.str(m, "notif", "normal")) ? "minimal" : "normal";
         Object vs = m.get("vehicles");
         if (vs instanceof List) for (Object o : (List<?>) vs) {
             if (!(o instanceof Map)) continue;
@@ -83,7 +86,7 @@ final class Config {
         Config c = new Config();
         c.device = device; c.proto = proto; c.units = units; c.fast = fast; c.autoConn = autoConn; c.autoRec = autoRec; c.bg = bg; c.debug = debug;
         c.rpmJump = rpmJump; c.tpsJump = tpsJump; c.autoStopSec = autoStopSec; c.pidMode.putAll(pidMode);
-        c.vehicles.addAll(vehicles); c.vehicleId = vehicleId;
+        c.vehicles.addAll(vehicles); c.vehicleId = vehicleId; c.notif = notif;
         c.gears = v.gears; c.axle = v.axle; c.tire = v.tire; c.kLearned = v.kLearned;
         return c;
     }

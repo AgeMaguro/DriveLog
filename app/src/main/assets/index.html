@@ -233,6 +233,7 @@ input.full { width:100%; }
       <h3>Automatic</h3>
       <div class="setrow"><div class="l">Connect automatically<span class="small dim">Keeps looking for your adapter and connects as soon as the truck powers it (in the background too, if that is on below).</span></div><label class="switch"><input type="checkbox" id="setAutoConn"><span></span></label></div>
       <div class="setrow"><div class="l">Keep logging in the background<span class="small dim">Lets DriveLog connect and record with the app closed and the screen off (an ongoing notification shows while it runs). Turn off to log only while DriveLog is open.</span></div><label class="switch"><input type="checkbox" id="setBg"><span></span></label></div>
+      <div class="setrow"><div class="l">Background notification<span class="small dim">Android requires one while logging runs in the background. Minimal removes the status-bar icon and hides it on the lock screen. "Notification settings" opens Android's page where you can silence or hide it entirely (logging keeps running).</span></div><div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end"><select id="setNotif"><option value="normal">Normal (quiet)</option><option value="minimal">Minimal</option></select><button id="setNotifBtn">Notification settings…</button></div></div>
       <div class="setrow"><div class="l">Record automatically<span class="small dim">Starts a recording when the engine is running and saves the drive after the engine has been off for the delay below. Stopping by hand pauses it until the engine has been turned off.</span></div><label class="switch"><input type="checkbox" id="setAutoRec"><span></span></label></div>
       <div class="setrow"><div class="l">Engine-off delay (seconds)<span class="small dim">How long RPM must read zero before the drive is saved.</span></div><input type="number" step="5" id="setAutoStop"></div>
       <div class="hint">DriveLog has to stay open (screen on) to log. Phone in a mount with the screen on works best.</div>
@@ -307,7 +308,7 @@ const DEFAULTS = {
   device: '', deviceName: '', proto: '2', units: 'us', fast: true, screen: true, debug: false,
   gears: [3.06, 1.63, 1.00, 0.70], axle: 3.73, tire: 30.0, kLearned: null,
   rpmJump: 500, tpsJump: 15, pidMode: {}, chart: ['0C', '0D', '11'], lastUpdCheck: 0,
-  autoConn: true, autoRec: true, autoStopSec: 20, bg: true, vehicles: [], vehicleId: ''
+  autoConn: true, autoRec: true, autoStopSec: 20, bg: true, notif: 'normal', vehicles: [], vehicleId: ''
 };
 let S = Object.assign({}, DEFAULTS);
 try { Object.assign(S, JSON.parse(localStorage.getItem(SKEY) || '{}')); } catch (e) { Log.warn('settings unreadable, using defaults'); }
@@ -1642,7 +1643,7 @@ const render = {
     $('setScreen').checked = S.screen; $('setUnits').value = S.units; $('setFast').checked = S.fast; $('setDebug').checked = S.debug;
     $('setGears').value = S.gears.join(', '); $('setAxle').value = S.axle; $('setTire').value = S.tire;
     $('setRpmJump').value = S.rpmJump; $('setTpsJump').value = S.tpsJump;
-    $('setAutoConn').checked = S.autoConn; $('setBg').checked = S.bg !== false; $('setAutoRec').checked = S.autoRec; $('setAutoStop').value = S.autoStopSec;
+    $('setAutoConn').checked = S.autoConn; $('setBg').checked = S.bg !== false; $('setNotif').value = S.notif === 'minimal' ? 'minimal' : 'normal'; $('setAutoRec').checked = S.autoRec; $('setAutoStop').value = S.autoStopSec;
     render.kVal(); render.pidList(); renderVehicle();
     $('verVal').textContent = VERSION + (NATIVE ? '' : ' (browser preview)');
   },
@@ -1950,6 +1951,8 @@ $('setScreen').onchange = e => { S.screen = e.target.checked; saveSettings(); };
 $('setUnits').onchange = e => { S.units = e.target.value; saveSettings(); Live.min = {}; Live.max = {}; Live.hist = []; if (Conn.state === 'on') render.tiles(); render.pidList(); };
 $('setAutoConn').onchange = e => { S.autoConn = e.target.checked; AutoConn.nextAt = 0; saveSettings(); render.autoInfo(); };
 $('setBg').onchange = e => { S.bg = e.target.checked; saveSettings(); if (!NATIVE) toast('Background logging works in the Android app'); };
+$('setNotif').onchange = e => { S.notif = e.target.value; saveSettings(); if (!NATIVE) toast('Notifications are part of the Android app'); };
+$('setNotifBtn').onclick = () => NATIVE ? AndroidDL.openNotificationSettings() : toast('Opens Android notification settings in the app');
 $('setAutoRec').onchange = e => { S.autoRec = e.target.checked; Auto.reset(); saveSettings(); render.autoInfo(); };
 $('setFast').onchange = e => { S.fast = e.target.checked; Conn.fastOk = true; saveSettings(); };
 $('setDebug').onchange = e => { S.debug = e.target.checked; saveSettings(); if (S.debug) Log.info('Debug log on, app ' + VERSION); };

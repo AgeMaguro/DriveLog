@@ -29,6 +29,7 @@ public class LogService extends Service {
     static final String ACTION_MARK = "com.agemaguro.drivelog.MARK";
     static final String ACTION_PING = "com.agemaguro.drivelog.PING";
     private static final String CHANNEL = "drivelog_logging";
+    private static final String CHANNEL_MIN = "drivelog_logging_min";
     private static final int NOTE_ID = 7;
     private static final long WAIT_PING_MS = 60_000L;
 
@@ -38,6 +39,7 @@ public class LogService extends Service {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private PowerManager.WakeLock wake;
     private String lastText = "";
+    private String lastChannel = "";
     private boolean foreground;
     private boolean fullHold;
     private long lastCmd;
@@ -59,12 +61,24 @@ public class LogService extends Service {
     public void onCreate() {
         super.onCreate();
         running = true;
-        NotificationManager nm = getSystemService(NotificationManager.class);
+        ensureChannels(this);
+    }
+
+    /** Android fixes a channel's importance once it exists, so the two styles are two channels. */
+    static void ensureChannels(Context c) {
+        NotificationManager nm = c.getSystemService(NotificationManager.class);
         NotificationChannel ch = new NotificationChannel(CHANNEL, "Background logging", NotificationManager.IMPORTANCE_LOW);
         ch.setDescription("Shown while DriveLog is connected to or waiting for your OBD2 adapter");
         ch.setShowBadge(false);
         nm.createNotificationChannel(ch);
+        NotificationChannel mn = new NotificationChannel(CHANNEL_MIN, "Background logging (minimal)", NotificationManager.IMPORTANCE_MIN);
+        mn.setDescription("Same notification with no status-bar icon, collapsed and hidden on the lock screen");
+        mn.setShowBadge(false);
+        mn.setLockscreenVisibility(Notification.VISIBILITY_SECRET);
+        nm.createNotificationChannel(mn);
     }
+
+    static String channelFor(Config cfg) { return "minimal".equals(cfg.notif) ? CHANNEL_MIN : CHANNEL; }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -104,7 +118,9 @@ public class LogService extends Service {
         boolean fresh = SystemClock.elapsedRealtime() - lastCmd < 5000;   // give a just-requested connection time to show up
         if (!e.config().bg || (!e.wantsService() && !fresh)) { stopSelf(); return; }
         String text = e.summary();
-        if (!text.equals(lastText)) {
+        if (!channelFor(e.config()).equals(lastChannel)) {   // notification style changed in Settings
+            try { startForeground(NOTE_ID, build(text), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE); lastText = text; } catch (Exception ex) { Log.w(TAG, "restyle failed: " + ex); }
+        } else if (!text.equals(lastText)) {
             lastText = text;
             getSystemService(NotificationManager.class).notify(NOTE_ID, build(text));
         }
@@ -114,9 +130,10 @@ public class LogService extends Service {
     }
 
     private Notification build(String text) {
+        lastChannel = channelFor(EngineHost.get(this).engine.config());
         Intent open = new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         PendingIntent openPi = PendingIntent.getActivity(this, 0, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-        Notification.Builder b = new Notification.Builder(this, CHANNEL)
+        Notification.Builder b = new Notification.Builder(this, lastChannel)
                 .setSmallIcon(R.drawable.ic_stat)
                 .setContentTitle("DriveLog")
                 .setContentText(text)
