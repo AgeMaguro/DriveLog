@@ -255,6 +255,12 @@ input.full { width:100%; }
     </div>
 
     <div class="card">
+      <h3>Fuel economy (estimated)</h3>
+      <div class="small dim" style="margin-bottom:6px">The truck reports air flow, not fuel. DriveLog assumes gasoline burned at the ideal 14.7:1 mixture and works out MPG from the MAF sensor (needs MAF in the sensor list). Hold the Fuel economy tile on Live to read more.</div>
+      <div class="setrow"><div class="l">Adjust for fuel trims<span class="small dim">The computer adds or removes fuel (short + long term trim) to hold the mixture. On: the estimate follows it. Off: pure air flow ÷ 14.7.</span></div><label class="switch"><input type="checkbox" id="setMpgTrims"><span></span></label></div>
+    </div>
+
+    <div class="card">
       <h3>Event detection</h3>
       <div class="setrow"><div class="l">RPM jump<span class="small dim">Flag when RPM rises this much within 2 s while speed stays about the same.</span></div><input type="number" step="50" id="setRpmJump"></div>
       <div class="setrow"><div class="l">Throttle jump (%)<span class="small dim">Flag when throttle opens this much more than it was 1-3 s earlier, ending at 40% or more.</span></div><input type="number" step="1" id="setTpsJump"></div>
@@ -308,7 +314,7 @@ const DEFAULTS = {
   device: '', deviceName: '', proto: '2', units: 'us', fast: true, screen: true, debug: false,
   gears: [3.06, 1.63, 1.00, 0.70], axle: 3.73, tire: 30.0, kLearned: null,
   rpmJump: 500, tpsJump: 15, pidMode: {}, chart: ['0C', '0D', '11'], lastUpdCheck: 0,
-  autoConn: true, autoRec: true, autoStopSec: 20, bg: true, notif: 'normal', vehicles: [], vehicleId: ''
+  autoConn: true, autoRec: true, autoStopSec: 20, bg: true, notif: 'normal', mpgTrims: true, vehicles: [], vehicleId: ''
 };
 let S = Object.assign({}, DEFAULTS);
 try { Object.assign(S, JSON.parse(localStorage.getItem(SKEY) || '{}')); } catch (e) { Log.warn('settings unreadable, using defaults'); }
@@ -498,6 +504,10 @@ const PID_INFO = {
     why: 'A quick check of the battery and alternator. It reads independently of the engine computer.',
     typical: 'Engine off: about 12.4-12.8 V (12.6 is full). Cranking: dips but stays above about 9.6 V. Running: about 13.5-14.7 V.',
     watch: 'Below 13 V when running (alternator or belt), above 15 V (overcharge), or dropping a lot when you turn things on. A big gap from ECU volts means a voltage drop in the wiring.' },
+  'MPG': { what: 'A fuel economy estimate worked out by DriveLog. The truck reports how much air the engine takes in (MAF), not how much fuel it burns, so DriveLog assumes the computer is holding the ideal gasoline mixture (about 14.7 parts air to 1 part fuel by weight) and divides: fuel = air / 14.7. It then adjusts for the computer\'s short and long term fuel trims (Settings > Fuel economy). Speed divided by fuel flow gives miles per gallon; it averages the last 10 seconds because the instant number jumps around.',
+    why: 'A quick way to see what a repair, a tire change, a different route or a heavy foot does to mileage, and to spot a problem (a stuck thermostat, dragging brakes or a rich-running engine all push it down). When stopped it shows fuel burned per hour instead.',
+    typical: 'It is an estimate and can be off by 10-15% or more compared with a tank fill-up, so use it to compare drives with each other, not as an exact number. Roughly: a midsize pickup might show around 20 mpg at steady highway speed, mid teens in town, and about half a gallon an hour at a warm idle.',
+    watch: 'Readings that look too high going downhill or coasting (the computer cuts fuel with the throttle closed, but the air meter keeps reading). A MAF sensor that reads wrong skews it, and so do fuel trims that sit far from zero; the trim adjustment cancels part of that. For a true figure, compare the Drives tab total with the gallons you add at the pump.' },
   'GEAR': { what: 'The gear the transmission is probably in, worked out by DriveLog from RPM divided by speed and compared with your gear ratios.',
     why: 'OBD2 does not report the gear, so this estimate is how DriveLog spots downshifts, RPM flares and possible slip.',
     typical: 'The converter text under it says whether the torque converter looks locked (RPM close to the gear ratio) or unlocked (RPM several percent higher).',
@@ -506,16 +516,19 @@ const PID_INFO = {
 function showPidInfo(key) {
   const info = PID_INFO[key], P = PIDS[key];
   if (!info) return;
-  const title = key === 'GEAR' ? 'Gear (calculated)' : P.n;
+  const title = key === 'GEAR' ? 'Gear (calculated)' : key === 'MPG' ? 'Fuel economy (estimated)' : P.n;
   let live = '';
   if (key === 'GEAR') {
     const last = Live.hist[Live.hist.length - 1];
     if (Conn.state === 'on' && last) live = last.gear ? `Right now: gear ${last.gear}` : 'Right now: no gear match';
+  } else if (key === 'MPG') {
+    const e = Conn.state === 'on' ? liveEcon() : null;
+    if (e) live = `Right now: ${e.text} ${e.unit}` + (e.flow ? ` (${fmtNum(e.flow.v, 2)} ${e.flow.u})` : '');
   } else if (Conn.state === 'on' && Live.raw[key] != null) {
     const v = toDisp(key, Live.raw[key]), mm = Live.min[key] != null ? ` (this session: min ${fmtNum(Live.min[key], P.d)}, max ${fmtNum(Live.max[key], P.d)})` : '';
     live = `Right now: ${fmtNum(v, P.d)} ${unitOf(key)}${mm}`;
   }
-  const code = key === 'GEAR' ? 'Calculated by DriveLog' : key === 'RV' ? 'Read by the adapter (command ATRV)' : `OBD2 mode 01, PID ${key} · unit: ${unitOf(key) || '-'}`;
+  const code = key === 'GEAR' ? 'Calculated by DriveLog' : key === 'MPG' ? 'Calculated by DriveLog from MAF (PID 10) and speed' : key === 'RV' ? 'Read by the adapter (command ATRV)' : `OBD2 mode 01, PID ${key} · unit: ${unitOf(key) || '-'}`;
   const sec = (h, t) => `<div style="margin-top:9px"><b>${h}</b><div class="small" style="color:var(--text)">${esc(t)}</div></div>`;
   popup(title, `<div style="max-height:62vh;overflow:auto">
     <div class="small dim">${esc(code)}</div>
@@ -1010,6 +1023,34 @@ const AutoConn = {
 };
 window.saveNow = () => { try { Rec.flush(); } catch (e) {} };
 
+/* Estimated fuel use ("assumed MPG"). The truck reports air flow (MAF, g/s), not fuel. Gasoline burns at about 14.7 g of air per
+   1 g of fuel and weighs about 2,835 g per US gallon, so fuel = MAF / 14.7. The computer adds or removes fuel with its trims to
+   hold that ratio, so (when the setting is on) the short + long term trims scale the result. Fuel cut on a closed throttle is not
+   seen, so downhill coasting reads a little high. */
+const FUEL = { AFR: 14.7, G_PER_GAL: 2835, L_PER_GAL: 3.78541, KM_PER_MI: 1.609344 };
+function trimSum(a, b) { return a == null && b == null ? null : (a || 0) + (b || 0); }
+// total trim in %: average of the banks that report one (bank 1 = PIDs 06+07, bank 2 = 08+09)
+function trimMean(t1, t2) { const l = [t1, t2].filter(x => x != null); return l.length ? Math.max(-35, Math.min(35, l.reduce((a, b) => a + b, 0) / l.length)) : 0; }
+function fuelGps(maf, trim) { return maf == null ? null : Math.max(0, maf) / FUEL.AFR / FUEL.G_PER_GAL * (1 + (S.mpgTrims !== false ? trim || 0 : 0) / 100); }   // gallons per second
+// mpg / gallons per hour -> what to show for the chosen units
+function fmtEcon(mpg) { return S.units === 'metric' ? { v: mpg > 0 ? FUEL.L_PER_GAL * 100 / (mpg * FUEL.KM_PER_MI) : null, u: 'L/100 km' } : { v: mpg, u: 'mpg' }; }
+function fmtFlow(gph) { return S.units === 'metric' ? { v: gph * FUEL.L_PER_GAL, u: 'L/h' } : { v: gph, u: 'gal/h' }; }
+function fmtFuel(gal) { return S.units === 'metric' ? { v: gal * FUEL.L_PER_GAL, u: 'L' } : { v: gal, u: 'gal' }; }
+// live figure: ratio of the last 10 s of average speed to average fuel flow (instant MPG is too jumpy to read)
+function liveEcon() {
+  const now = Date.now(); let n = 0, sm = 0, sf = 0;
+  for (let i = Live.hist.length - 1; i >= 0; i--) {
+    const h = Live.hist[i]; if (now - h.t > 10000) break;
+    const g = fuelGps(h.disp['10'], trimMean(trimSum(h.disp['06'], h.disp['07']), trimSum(h.disp['08'], h.disp['09'])));
+    if (g == null || h.mph == null) continue;
+    n++; sm += h.mph; sf += g * 3600;
+  }
+  if (!n) return null;
+  const mph = sm / n, gph = sf / n;
+  if (mph >= 3 && gph > 0) { const mpg = mph / gph, e = fmtEcon(mpg); return { text: mpg > 99.9 ? (S.units === 'metric' ? '<2.4' : '99+') : fmtNum(e.v, 1), unit: e.u, flow: fmtFlow(gph) }; }
+  const f = fmtFlow(gph); return { text: fmtNum(f.v, 2), unit: f.u, flow: null };
+}
+
 const Drives = {
   list() {
     const out = [];
@@ -1045,8 +1086,28 @@ const Drives = {
     if (iS >= 4) for (let i = 1; i < rows.length; i++) { const v = rows[i][iS], dt = (rows[i][0] - rows[i - 1][0]) / 3600000; if (v != null && dt < 0.01) dist += v * dt; }
     const max = a => a.length ? Math.max(...a) : null, min = a => a.length ? Math.min(...a) : null;
     const moving = sp.filter(v => v > 3);
+    // estimated fuel (see FUEL above): total used, miles per gallon over the stretches that have both air flow and speed, and idle burn
+    let fuelGal = null, mpg = null, idleGph = null;
+    const iM = ci('10');
+    if (iM >= 4 && rows.length > 1) {
+      const iT = ['06', '07', '08', '09'].map(ci), iR = ci('0C'), toMi = meta.units === 'metric' ? 0.621371 : 1;
+      const g = (r, i) => i >= 4 ? r[i] : null;
+      let fuel = 0, fuelBoth = 0, mi = 0, idleF = 0, idleS = 0;
+      for (let i = 1; i < rows.length; i++) {
+        const r = rows[i], dt = (r[0] - rows[i - 1][0]) / 1000;
+        if (!(dt > 0) || dt > 10 || r[iM] == null) continue;
+        const f = fuelGps(r[iM], trimMean(trimSum(g(r, iT[0]), g(r, iT[1])), trimSum(g(r, iT[2]), g(r, iT[3])))) * dt;
+        fuel += f;
+        if (r[iS] == null) continue;
+        fuelBoth += f; mi += r[iS] * toMi * dt / 3600;
+        if (r[iS] * toMi < 2 && (iR < 4 || r[iR] == null || r[iR] >= 400)) { idleF += f; idleS += dt; }
+      }
+      if (fuel > 0) fuelGal = fuel;
+      if (fuelBoth > 0.001 && mi >= 0.2) mpg = mi / fuelBoth;
+      if (idleS >= 30 && idleF > 0) idleGph = idleF / idleS * 3600;
+    }
     return { dur: meta.end - meta.start, dist, maxSpeed: max(sp), avgSpeed: moving.length ? moving.reduce((a, b) => a + b, 0) / moving.length : null,
-      maxRpm: max(rpm), maxCool: max(cool), minBat: min(bat), rate: rows.length / Math.max(1, (meta.end - meta.start) / 1000) };
+      maxRpm: max(rpm), maxCool: max(cool), minBat: min(bat), rate: rows.length / Math.max(1, (meta.end - meta.start) / 1000), fuelGal, mpg, idleGph };
   },
   // Finds the rpm-per-mph factor that best explains the drive's steady points across all gears.
   learn(meta, rows) {
@@ -1405,6 +1466,7 @@ const render = {
     const { fast, slow } = Conn.plan();
     const pids = [...fast, ...slow];
     let html = `<div class="tile wide" id="tile-GEAR" data-info="GEAR"><div class="lab">Gear (calculated)</div><div class="val" id="v-GEAR">–</div><div class="mm" id="mm-GEAR">RPM ÷ speed</div></div>`;
+    if (pids.includes('10')) html += `<div class="tile wide" id="tile-MPG" data-info="MPG"><div class="lab">Fuel economy (estimated)</div><div class="val"><span id="v-MPG">–</span><small id="u-MPG"></small></div><div class="mm" id="mm-MPG">from air flow, 10 s average</div></div>`;
     for (const p of pids) {
       const ci = S.chart.indexOf(p);
       html += `<div class="tile${ci >= 0 ? ' sel' : ''}" data-pid="${p}" data-info="${p}" style="${ci >= 0 ? '--c:' + COLORS[ci] : ''}">${ci >= 0 ? '<span class="dot"></span>' : ''}<div class="lab">${esc(PIDS[p].s)}</div><div class="val"><span id="v-${p}">–</span><small>${esc(unitOf(p))}</small></div><div class="mm" id="mm-${p}"></div></div>`;
@@ -1423,6 +1485,12 @@ const render = {
       const el = $('v-' + p); if (!el) continue;
       el.textContent = fmtNum(s.disp[p], PIDS[p].d);
       const mm = $('mm-' + p); if (mm && Live.min[p] != null) mm.textContent = `min ${fmtNum(Live.min[p], PIDS[p].d)} · max ${fmtNum(Live.max[p], PIDS[p].d)}`;
+    }
+    const ev = $('v-MPG');
+    if (ev) {
+      const e = liveEcon();
+      ev.textContent = e ? e.text : '–'; $('u-MPG').textContent = e ? e.unit : '';
+      $('mm-MPG').textContent = !e ? 'waiting for air flow' : e.flow ? `${fmtNum(e.flow.v, 2)} ${e.flow.u} · 10 s average` : 'idling: fuel flow, not distance';
     }
     const gv = $('v-GEAR');
     if (gv) {
@@ -1509,6 +1577,7 @@ const render = {
         <div><b>${fmtNum(st.minBat, 1)}</b><span>min battery V</span></div>
         <div><b>${meta.events.length}</b><span>events</span></div>
         <div><b>${fmtNum(st.rate, 1)}</b><span>rows / sec</span></div>
+        ${st.fuelGal != null ? `<div><b>${fmtNum(fmtEcon(st.mpg).v, 1)}</b><span>est. ${fmtEcon(1).u}</span></div><div><b>${fmtNum(fmtFuel(st.fuelGal).v, 2)}</b><span>est. ${fmtFuel(1).u} used</span></div><div><b>${fmtNum(st.idleGph == null ? null : fmtFlow(st.idleGph).v, 2)}</b><span>est. ${fmtFlow(1).u} idling</span></div>` : ''}
       </div>
       <div class="row" style="margin-top:10px"><button class="pri" id="ddShare">Share CSV</button><button id="ddSave">Save to Downloads</button><button class="danger" id="ddDel">Delete</button></div></div>
       <div class="card" id="ddChartCard"><h3>Chart</h3><div class="zoombar" id="ddZoom" style="display:none"></div><div class="chips" id="ddChips"></div><canvas id="ddChart" height="210"></canvas></div>
@@ -1610,6 +1679,7 @@ const render = {
         ${tr('Duration', fmtDur(sA.dur), fmtDur(sB.dur))}
         ${tr('Distance (' + dU + ')', fmtNum(sA.dist, 1), fmtNum(sB.dist, 1))}
         ${tr('Avg moving (' + spU + ')', fmtNum(sA.avgSpeed, 0), fmtNum(sB.avgSpeed, 0))}
+        ${sA.fuelGal != null || sB.fuelGal != null ? tr('Est. economy (' + fmtEcon(1).u + ')', fmtNum(sA.mpg == null ? null : fmtEcon(sA.mpg).v, 1), fmtNum(sB.mpg == null ? null : fmtEcon(sB.mpg).v, 1)) + tr('Est. fuel used (' + fmtFuel(1).u + ')', fmtNum(sA.fuelGal == null ? null : fmtFuel(sA.fuelGal).v, 2), fmtNum(sB.fuelGal == null ? null : fmtFuel(sB.fuelGal).v, 2)) : ''}
         ${tr('Max speed (' + spU + ')', fmtNum(sA.maxSpeed, 0), fmtNum(sB.maxSpeed, 0))}
         ${tr('Max rpm', fmtNum(sA.maxRpm, 0), fmtNum(sB.maxRpm, 0))}
         ${tr('Max coolant (' + tU + ')', fmtNum(sA.maxCool, 0), fmtNum(sB.maxCool, 0))}
@@ -1642,7 +1712,7 @@ const render = {
     $('protoSel').value = S.proto;
     $('setScreen').checked = S.screen; $('setUnits').value = S.units; $('setFast').checked = S.fast; $('setDebug').checked = S.debug;
     $('setGears').value = S.gears.join(', '); $('setAxle').value = S.axle; $('setTire').value = S.tire;
-    $('setRpmJump').value = S.rpmJump; $('setTpsJump').value = S.tpsJump;
+    $('setMpgTrims').checked = S.mpgTrims !== false; $('setRpmJump').value = S.rpmJump; $('setTpsJump').value = S.tpsJump;
     $('setAutoConn').checked = S.autoConn; $('setBg').checked = S.bg !== false; $('setNotif').value = S.notif === 'minimal' ? 'minimal' : 'normal'; $('setAutoRec').checked = S.autoRec; $('setAutoStop').value = S.autoStopSec;
     render.kVal(); render.pidList(); renderVehicle();
     $('verVal').textContent = VERSION + (NATIVE ? '' : ' (browser preview)');
@@ -1968,6 +2038,7 @@ $('setBg').onchange = e => { S.bg = e.target.checked; saveSettings(); if (!NATIV
 $('setNotif').onchange = e => { S.notif = e.target.value; saveSettings(); if (!NATIVE) toast('Notifications are part of the Android app'); };
 $('setNotifBtn').onclick = () => NATIVE ? AndroidDL.openNotificationSettings() : toast('Opens Android notification settings in the app');
 $('setAutoRec').onchange = e => { S.autoRec = e.target.checked; Auto.reset(); saveSettings(); render.autoInfo(); };
+$('setMpgTrims').onchange = e => { S.mpgTrims = e.target.checked; saveSettings(); };
 $('setFast').onchange = e => { S.fast = e.target.checked; Conn.fastOk = true; saveSettings(); };
 $('setDebug').onchange = e => { S.debug = e.target.checked; saveSettings(); if (S.debug) Log.info('Debug log on, app ' + VERSION); };
 $('setGears').onchange = e => {

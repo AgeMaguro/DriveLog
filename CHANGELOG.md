@@ -1,5 +1,11 @@
 # DriveLog changelog
 
+## 1.0.9 (2026-11-11)
+- **Estimated fuel economy ("assumed MPG"):** the truck reports air flow (MAF), not fuel, so DriveLog assumes gasoline at the ideal 14.7:1 mixture and works out fuel = MAF / 14.7, then adjusts for the short + long term fuel trims. It is an estimate, best for comparing drives, not an exact mileage.
+  - Live tab: a Fuel economy tile (speed over fuel flow, 10 s average; gal/h or L/h when stopped). Hold it to read more. It shows when MAF is in the sensor list.
+  - Drives tab: each drive with MAF data shows estimated mpg (or L/100 km), fuel used, and fuel burned per hour at idle (needs 30 s of idling). Compare shows economy and fuel used for both drives.
+  - Settings > Fuel economy: "Adjust for fuel trims" (on by default; off is pure air flow / 14.7).
+
 ## 1.0.8 (2026-11-11)
 - **Pick a saved vehicle for a new VIN:** when the adapter reports a VIN DriveLog hasn't seen, the popup now lists all your saved vehicles. Tap one to link the VIN to it (it switches to that vehicle), or choose "Add new vehicle". A vehicle that already has a VIN asks before replacing it. If you tap "Not now", tap the "Vehicle:" line on Live, or Settings > Vehicle > "Choose vehicle for connected VIN", to pick later.
 - **Recording waits for the choice:** with a new VIN, automatic recording holds for up to 30 s so the drive starts with the right gear ratios; the notification says "New vehicle: open DriveLog to choose it". If nobody answers it records anyway, tagged with the VIN, and picking a vehicle later still assigns the drive to it.
