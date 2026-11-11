@@ -1,5 +1,9 @@
 # DriveLog changelog
 
+## 1.0.8 (2026-11-11)
+- **Pick a saved vehicle for a new VIN:** when the adapter reports a VIN DriveLog hasn't seen, the popup now lists all your saved vehicles. Tap one to link the VIN to it (it switches to that vehicle), or choose "Add new vehicle". A vehicle that already has a VIN asks before replacing it. If you tap "Not now", tap the "Vehicle:" line on Live, or Settings > Vehicle > "Choose vehicle for connected VIN", to pick later.
+- **Recording waits for the choice:** with a new VIN, automatic recording holds for up to 30 s so the drive starts with the right gear ratios; the notification says "New vehicle: open DriveLog to choose it". If nobody answers it records anyway, tagged with the VIN, and picking a vehicle later still assigns the drive to it.
+
 ## 1.0.7 (2026-11-09)
 - **Quieter background notification:** Settings > Automatic > Background notification: Normal (quiet, with a status-bar icon) or Minimal (no status-bar icon, collapsed, hidden on the lock screen). "Notification settings…" opens Android's page for it, where you can also turn the notification off completely; logging keeps running either way (Android lists it under running apps).
 

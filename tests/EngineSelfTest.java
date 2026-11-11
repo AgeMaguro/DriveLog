@@ -174,6 +174,36 @@ public class EngineSelfTest {
         check("connects (unknown VIN)", waitFor(e2::isConnected, 15000));
         check("no profile matched", "".equals(state(e2).get("vehicleId")) && "1GCCS196858123456".equals(state(e2).get("vin")));
         e2.shutdown();
+        // new VIN: auto-record waits until you pick a vehicle (or the hold runs out)
+        long oldHold = Engine.vinHoldMs;
+        Engine.vinHoldMs = 9000;
+        String unknown = cfgJson.replace("1GCCS196858123456", "1GCCS196858999999");
+        TestHost h3 = new TestHost();
+        h3.factory = h.factory;
+        Engine e3 = new Engine(new FileStore(tmp()), h3, "test");
+        e3.setConfig(unknown);
+        e3.start();
+        check("connects (hold)", waitFor(e3::isConnected, 15000));
+        check("state flags the new VIN as pending", Boolean.TRUE.equals(state(e3).get("vinPending")));
+        check("summary asks you to choose", e3.summary().startsWith("New vehicle"));
+        long t0 = System.currentTimeMillis();
+        boolean early = waitFor(e3::isRecording, 3000);
+        System.out.println("   (recorded within 3 s of connecting while pending: " + early + ", " + (System.currentTimeMillis() - t0) + " ms)");
+        check("does not auto-record while the VIN is unresolved", !early);
+        e3.setConfig(unknown.replace("\"vin\":\"\"", "\"vin\":\"1GCCS196858123456\""));   // you linked the truck's VIN to 'Other car'
+        check("pending clears once linked", !Boolean.TRUE.equals(state(e3).get("vinPending")));
+        check("records right after linking", waitFor(e3::isRecording, 6000));
+        e3.shutdown();
+        // nobody answers: it records anyway when the hold runs out
+        Engine.vinHoldMs = 3000;
+        TestHost h4 = new TestHost();
+        h4.factory = h.factory;
+        Engine e4 = new Engine(new FileStore(tmp()), h4, "test");
+        e4.setConfig(unknown);
+        e4.start();
+        check("hold expires and the drive is recorded anyway", waitFor(e4::isRecording, 15000));
+        e4.shutdown();
+        Engine.vinHoldMs = oldHold;
     }
 
     static void retry() throws Exception {

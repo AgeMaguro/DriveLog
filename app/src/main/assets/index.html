@@ -199,7 +199,7 @@ input.full { width:100%; }
       <div class="row" style="gap:8px"><select id="vehSel" style="flex:1;min-width:0"></select><button id="vehAdd">Add…</button></div>
       <input type="text" class="full" id="vehName" maxlength="40" placeholder="Name this vehicle" style="margin-top:8px">
       <div class="small dim" id="vehInfo" style="margin-top:6px"></div>
-      <div class="row" style="margin-top:8px"><button id="vehVinBtn" style="display:none">Use the connected vehicle's VIN</button><button class="danger" id="vehDel">Delete</button></div>
+      <div class="row" style="margin-top:8px"><button id="vehVinBtn" style="display:none">Choose vehicle for connected VIN</button><button class="danger" id="vehDel">Delete</button></div>
       <div class="hint" style="margin-top:8px">Gear ratios, axle ratio and tire size (below) are saved separately for each vehicle. When the adapter reports a VIN, DriveLog switches to the matching vehicle by itself and tags each drive with it.</div>
     </div>
     <div class="card">
@@ -1811,11 +1811,25 @@ function onVehicleVin(vin) {
     free[0].vin = vin; saveSettings(); requestDecode(vin); renderVehicle(); toast('Vehicle linked: ' + free[0].name); return;
   }
   if (vinDismissed.has(vin)) return;
+  vinPrompt(vin);
+}
+// "Which vehicle is this?": pick a saved vehicle to link the new VIN to, or add a new one.
+function vinPrompt(vin) {
+  if (!vin) return;
   const g = vinGuess(vin), act = activeVehicle();
+  const order = S.vehicles.slice().sort((x, y) => (!x.vin ? 0 : 1) - (!y.vin ? 0 : 1) || (y.id === S.vehicleId) - (x.id === S.vehicleId));
+  const chips = order.map(v => `<span class="chip" data-v="${esc(v.id)}"${v.vin ? ' style="opacity:.75"' : ''}>${esc(v.name)}${v.vin ? ' · VIN …' + esc(v.vin.slice(-4)) : ''}</span>`).join('');
   popup('New vehicle detected', `<p style="margin:0 0 4px"><b>${esc(g.text || 'Unknown make')}</b></p><div class="small dim" style="margin-bottom:8px">VIN ${esc(vin)}</div>
-    <p class="small" style="margin:0">DriveLog keeps separate gear ratios, axle ratio and tire size for each vehicle. ${act && !act.vin ? `If this is <b>${esc(act.name)}</b>, link the VIN to it. Otherwise add it as a new vehicle.` : 'Add it as a new vehicle?'}</p>`,
-    [['Cancel', () => vinDismissed.add(vin)], ...(act && !act.vin ? [["It's " + act.name.slice(0, 24), () => { act.vin = vin; saveSettings(); requestDecode(vin); renderVehicle(); refreshSettingsPage(); toast('VIN linked to ' + act.name); }]] : []),
-     ['Add new vehicle', () => { addVehicle({ vin, name: g.text || 'New vehicle', autoName: true }); toast('Added. Set its gear ratios, axle ratio and tire size in Settings.', 5000); }]]);
+    <p class="small" style="margin:0">Is this one of your saved vehicles? Tap it to link this VIN, or add a new vehicle. Each vehicle keeps its own gear ratios, axle ratio and tire size.</p><div class="chips" id="vinPick">${chips}</div>`,
+    [['Not now', () => vinDismissed.add(vin), 'sec'], ['Add new vehicle', () => { addVehicle({ vin, name: g.text || 'New vehicle', autoName: true }); toast('Added. Set its gear ratios, axle ratio and tire size in Settings.', 5000); }]]);
+  const link = v => { v.vin = vin; useVehicle(v.id, true); requestDecode(vin); renderVehicle(); refreshSettingsPage(); toast('VIN linked to ' + v.name); };
+  $('vinPick').querySelectorAll('.chip').forEach(ch => ch.onclick = () => {
+    const v = vehicleById(ch.dataset.v); if (!v) return;
+    if (!v.vin) { closeModal(); link(v); return; }
+    closeModal();
+    popup('Replace its VIN?', `<p style="margin:0" class="small"><b>${esc(v.name)}</b> is already linked to VIN ${esc(v.vin)}. Replace it with ${esc(vin)}? (Use this if the old VIN was linked by mistake.)</p>`,
+      [['Cancel', () => vinPrompt(vin)], ['Replace', () => link(v)]]);
+  });
 }
 // Which saved profile a drive belongs to (by id, else by VIN); null for drives from before profiles existed.
 function driveVehicle(m) { const x = m && m.vehicle; if (!x) return null; return (x.id && vehicleById(x.id)) || (x.vin && S.vehicles.find(v => v.vin === x.vin)) || null; }
@@ -1823,13 +1837,13 @@ function vehLabel(m) { const x = m && m.vehicle; if (!x) return ''; const p = dr
 function renderVehicle() {
   const a = activeVehicle();
   const line = $('vehLine');
-  if (line) { const show = a && (S.vehicles.length > 1 || a.vin || Conn.state === 'on'); line.style.display = show ? '' : 'none'; if (show) line.textContent = 'Vehicle: ' + a.name + (Conn.state === 'on' && curVin && a.vin !== curVin ? ' (connected vehicle is not linked to it)' : ''); }
+  if (line) { const show = a && (S.vehicles.length > 1 || a.vin || Conn.state === 'on'); line.style.display = show ? '' : 'none'; if (show) { const mis = Conn.state === 'on' && curVin && a.vin !== curVin; line.textContent = 'Vehicle: ' + a.name + (mis ? ' (connected vehicle is not linked to it. Tap to choose.)' : ''); line.style.cursor = mis ? 'pointer' : ''; line.onclick = mis ? () => vinPrompt(curVin) : null; } }
   const sel = $('vehSel'); if (!sel || !a) return;
   sel.innerHTML = S.vehicles.map(v => `<option value="${esc(v.id)}"${v.id === a.id ? ' selected' : ''}>${esc(v.name)}</option>`).join('');
   if (document.activeElement !== $('vehName')) $('vehName').value = a.name;
   const i = a.info;
   $('vehInfo').textContent = a.vin ? `VIN ${a.vin}${i ? ' · ' + [i.year, i.make, i.model].filter(Boolean).join(' ') + (i.engine ? ' · ' + i.engine : '') : ''}` : 'No VIN yet. It is read when you connect (some older vehicles do not report one).';
-  $('vehVinBtn').style.display = curVin && !a.vin && Conn.state === 'on' ? '' : 'none';
+  $('vehVinBtn').style.display = curVin && a.vin !== curVin && Conn.state === 'on' ? '' : 'none';
   $('vehDel').style.display = S.vehicles.length > 1 ? '' : 'none';
 }
 
@@ -1939,7 +1953,7 @@ $('vehSel').onchange = e => useVehicle(e.target.value);
 $('vehName').onchange = e => { const a = activeVehicle(), v = e.target.value.trim(); if (a && v) { a.name = v; a.autoName = false; saveSettings(); renderVehicle(); } else if (a) e.target.value = a.name; };
 $('vehAdd').onclick = () => popup('Add a vehicle', `<p class="small dim" style="margin:0 0 8px">It starts with the default gear ratios; set its own in Settings afterwards.${curVin && !S.vehicles.some(v => v.vin === curVin) ? ' The connected vehicle\'s VIN will be linked to it.' : ''}</p><input type="text" class="full" id="vehNewName" maxlength="40" placeholder="Name (e.g. Wife's Civic)">`,
   [['Cancel'], ['Add', () => { const n = $('vehNewName').value.trim(); const vin = curVin && !S.vehicles.some(v => v.vin === curVin) ? curVin : ''; addVehicle({ vin, name: n || 'New vehicle', autoName: !n }); }]]);
-$('vehVinBtn').onclick = () => { const a = activeVehicle(); if (a && curVin) { a.vin = curVin; saveSettings(); requestDecode(curVin); renderVehicle(); toast('VIN linked to ' + a.name); } };
+$('vehVinBtn').onclick = () => { if (curVin) vinPrompt(curVin); };
 $('vehDel').onclick = () => {
   const a = activeVehicle(); if (!a || S.vehicles.length < 2) return toast('Keep at least one vehicle');
   popup('Delete ' + a.name + '?', '<p class="small" style="margin:0">Its saved drives stay in the Drives tab. Only this vehicle\'s gear settings are removed.</p>',

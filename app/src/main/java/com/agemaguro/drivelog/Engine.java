@@ -59,6 +59,9 @@ final class Engine {
 
     private volatile Config cfg = new Config();
     private volatile String vin = "";
+    /** How long auto-record waits for you to say which vehicle a new VIN is (ms). Tests shorten it. */
+    static long vinHoldMs = 30000;
+    private volatile long vinHoldUntil = 0;
     private volatile Config effCfg;   // cfg with the gearing of the vehicle that is connected (cached)
     private volatile boolean stop = true;
     private Thread thread;
@@ -234,6 +237,7 @@ final class Engine {
             m.put("userOff", userOff);
             m.put("cruise", cruise);
             m.put("vin", vin);
+            m.put("vinPending", vinPending());
             Config.Veh sv = cfg.vehicleFor(vin);
             m.put("vehicleId", sv == null ? "" : sv.id);
             m.put("waiting", conn.equals("off") && eligibleAuto(cfg));
@@ -259,6 +263,7 @@ final class Engine {
     String summary() {
         String c = conn;
         if (recOn) return "Recording · " + fmtDur(Math.max(0, recEndT - recStartT)) + " · " + recRows + " rows";
+        if (c.equals("on") && !recOn && vinPending()) return "New vehicle: open DriveLog to choose it";
         if (c.equals("on")) return cfg.autoRec ? "Connected · recording starts when the engine runs" : "Connected";
         if (c.equals("connecting") || c.equals("init")) return status;
         if (eligibleAuto(cfg)) return "Waiting for your adapter";
@@ -427,6 +432,7 @@ final class Engine {
         if (!aborted()) {   // which vehicle is this? (mode 09 PID 02; many older vehicles don't answer, which is fine)
             vin = Elm.parseVin(tx("0902", 5000));
             effCfg = null;
+            vinHoldUntil = !vin.isEmpty() && cfg.vehicleFor(vin) == null ? System.currentTimeMillis() + vinHoldMs : 0;
             host.log("VIN: " + (vin.isEmpty() ? "(not reported)" : vin));
         }
         supported = sup;
@@ -456,7 +462,7 @@ final class Engine {
         if (recOn) recStop(null);
         elm.abort();
         closeTransport();
-        vin = ""; effCfg = null;
+        vin = ""; effCfg = null; vinHoldUntil = 0;
         setConn("off", statusText.isEmpty() ? "Not connected" : statusText, statusText.isEmpty() ? "" : "bad");
     }
 
@@ -693,6 +699,12 @@ final class Engine {
 
     // ================================================================= auto-record
 
+    /** True while a VIN no saved vehicle owns is waiting for you to pick or add a vehicle (so the drive gets the right gearing). */
+    private boolean vinPending() {
+        String v = vin;
+        return !v.isEmpty() && !cfg.vehicles.isEmpty() && System.currentTimeMillis() < vinHoldUntil && cfg.vehicleFor(v) == null;
+    }
+
     private void resetAuto() { suppressed = false; runSince = 0; offSince = 0; }
 
     /** Starts recording once the engine has been running for 2 s; saves the drive after RPM has read zero for the engine-off delay. */
@@ -703,7 +715,7 @@ final class Engine {
             offSince = 0;
             if (runSince == 0) runSince = s.t;
             if (recOn) engineSeen = true;
-            if (!recOn && !suppressed && s.t - runSince >= 2000) recStart(true);
+            if (!recOn && !suppressed && s.t - runSince >= 2000 && !vinPending()) recStart(true);
         } else if (s.rpm < 150) {
             runSince = 0;
             if (offSince == 0) offSince = s.t;
