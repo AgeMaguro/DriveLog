@@ -1,5 +1,8 @@
 # DriveLog changelog
 
+## 1.0.10 (2026-11-11)
+- **Fuel economy averaging window:** the Live fuel economy tile can average over 10 seconds (default), 30 seconds, 1 minute or 5 minutes. Tap the tile to cycle through them, or choose in Settings > Fuel economy > "Live average over". A longer window shows your real driving instead of every throttle blip; right after connecting it shows how much of the window it has so far (for example "0:42 of 5 min").
+
 ## 1.0.9 (2026-11-11)
 - **Estimated fuel economy ("assumed MPG"):** the truck reports air flow (MAF), not fuel, so DriveLog assumes gasoline at the ideal 14.7:1 mixture and works out fuel = MAF / 14.7, then adjusts for the short + long term fuel trims. It is an estimate, best for comparing drives, not an exact mileage.
   - Live tab: a Fuel economy tile (speed over fuel flow, 10 s average; gal/h or L/h when stopped). Hold it to read more. It shows when MAF is in the sensor list.
