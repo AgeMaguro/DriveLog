@@ -980,7 +980,8 @@ const Rec = {
     this.meta.done = true; this.saveMeta();
     this.on = false;
     if (NATIVE) AndroidDL.keepScreenOn(false);
-    toast(`${why ? why + ': ' : ''}saved drive, ${fmtDur(this.meta.end - this.meta.start)}, ${this.meta.rows} rows`, why ? 4500 : 2600);
+    let eco = ''; try { if (hasMaf(this.meta) && this.meta.rows > 1) eco = econText(driveEcon(this.meta)); } catch (e) { Log.warn('economy failed: ' + e); }
+    toast(`${why ? why + ': ' : ''}saved drive, ${fmtDur(this.meta.end - this.meta.start)}, ${this.meta.rows} rows${eco}`, why ? 4500 : 2600);
     Log.info('Stopped recording ' + this.meta.id + (why ? ' (' + why + ')' : ''));
     this.meta = null; render.conn(); render.drives();
   }
@@ -1063,6 +1064,24 @@ function liveEcon() {
   if (mph >= 3 && gal > 0) { const mpg = mi / gal, e = fmtEcon(mpg); return { text: mpg > 99.9 ? (S.units === 'metric' ? '<2.4' : '99+') : fmtNum(e.v, 1), unit: e.u, flow: fmtFlow(gph), cover }; }
   const f = fmtFlow(gph); return { text: fmtNum(f.v, 2), unit: f.u, flow: null, cover };
 }
+
+/* Trip-average economy for a saved drive, calculated from its rows once and remembered (so the Drives list is quick).
+   Recalculated if the drive grows, or when the units or the trim setting change. */
+let econCache = null;
+function econLoad() { if (!econCache) { try { econCache = JSON.parse(localStorage.getItem('drivelog.econ.v1') || '{}'); } catch (e) { econCache = {}; } } return econCache; }
+const econKey = m => [m.rows, m.end, S.mpgTrims !== false ? 1 : 0, m.units].join('|');
+function driveEconCached(m) { const c = econLoad()[m.id]; return c && c.k === econKey(m) ? c : null; }
+function driveEcon(m) {
+  const hit = driveEconCached(m); if (hit) return hit;
+  const st = Drives.stats(m, Drives.rows(m.id)), c = { k: econKey(m), mpg: st.mpg, fuel: st.fuelGal };
+  econLoad()[m.id] = c;
+  try { localStorage.setItem('drivelog.econ.v1', JSON.stringify(econCache)); } catch (e) { /* cache only */ }
+  return c;
+}
+function econPrune(list) { const c = econLoad(), keep = new Set(list.map(m => m.id)); let n = 0; for (const id in c) if (!keep.has(id)) { delete c[id]; n++; } if (n) try { localStorage.setItem('drivelog.econ.v1', JSON.stringify(c)); } catch (e) { /* cache only */ } }
+const econText = c => c && c.mpg != null ? ` · est. ${fmtNum(fmtEcon(c.mpg).v, 1)} ${fmtEcon(1).u}` : '';
+const hasMaf = m => (m.cols || []).some(c => c.k === '10');
+let econJob = 0;
 
 const Drives = {
   list() {
@@ -1554,9 +1573,19 @@ const render = {
     $('drivesList').innerHTML = filterBar + head + '<div class="card">' + list.map(m => {
       const d = new Date(m.start), when = d.toLocaleDateString() + ' ' + d.toTimeString().slice(0, 5);
       const picked = cmpSel.indexOf(m.id);
-      return `<div class="drive${picked >= 0 ? ' sel' : ''}" data-id="${m.id}"><div><div>${m.name ? `<b>${esc(m.name)}</b> <span class="dim small">${when}</span>` : when}${S.vehicles.length > 1 && vehLabel(m) ? ` <span class="dim small">· ${esc(vehLabel(m))}</span>` : ''}${m.demo ? ' <span class="dim small">(demo)</span>' : ''}${m.auto ? ' <span class="dim small">(auto)</span>' : ''}${!m.done && !(Rec.meta && Rec.meta.id === m.id) ? ' <span class="dim small">(app closed while recording)</span>' : ''}</div><div class="small dim">${fmtDur(m.end - m.start)} · ${m.rows} rows · ${m.events.length} events</div></div><span class="${picked >= 0 ? '' : 'dim'}">${cmpMode ? (picked >= 0 ? '✓' : '○') : '›'}</span></div>`;
+      return `<div class="drive${picked >= 0 ? ' sel' : ''}" data-id="${m.id}"><div><div>${m.name ? `<b>${esc(m.name)}</b> <span class="dim small">${when}</span>` : when}${S.vehicles.length > 1 && vehLabel(m) ? ` <span class="dim small">· ${esc(vehLabel(m))}</span>` : ''}${m.demo ? ' <span class="dim small">(demo)</span>' : ''}${m.auto ? ' <span class="dim small">(auto)</span>' : ''}${!m.done && !(Rec.meta && Rec.meta.id === m.id) ? ' <span class="dim small">(app closed while recording)</span>' : ''}</div><div class="small dim">${fmtDur(m.end - m.start)} · ${m.rows} rows · ${m.events.length} events<span id="econ-${m.id}">${hasMaf(m) ? econText(driveEconCached(m)) : ''}</span></div></div><span class="${picked >= 0 ? '' : 'dim'}">${cmpMode ? (picked >= 0 ? '✓' : '○') : '›'}</span></div>`;
     }).join('') + '</div>';
     bindFilter();
+    // fill in the trip-average economy of drives that have not been worked out yet, one at a time so the list stays responsive
+    const job = ++econJob, todo = list.filter(m => hasMaf(m) && m.rows > 1 && !driveEconCached(m));
+    econPrune(Drives.list());
+    const next = () => {
+      if (job !== econJob || !todo.length) return;
+      const m = todo.shift(), c = driveEcon(m), el = $('econ-' + m.id);
+      if (el) el.textContent = econText(c);
+      setTimeout(next, 20);
+    };
+    setTimeout(next, 30);
     $('drivesList').querySelectorAll('.drive').forEach(el => el.onclick = () => {
       const id = el.dataset.id;
       if (cmpMode) { const i = cmpSel.indexOf(id); if (i >= 0) cmpSel.splice(i, 1); else { if (cmpSel.length >= 2) cmpSel.shift(); cmpSel.push(id); } render.drives(); return; }
@@ -1995,7 +2024,13 @@ if (NATIVE) {
   DLNative.onQuery = (id, arr) => { const f = qWait[id]; if (f) { delete qWait[id]; f(arr); } };
   DLNative.onNotice = (kind, msg) => {
     Log.info('Engine notice ' + kind + ': ' + msg);
-    if (kind === 'toast') toast(msg, 4000);
+    if (kind === 'toast') {
+      toast(msg, 4000);
+      if (/saved drive/.test(msg)) setTimeout(() => {   // the engine has just saved a drive: add its trip-average economy
+        try { const m = Drives.list()[0]; if (m && m.done && hasMaf(m) && m.rows > 1) { const e = econText(driveEcon(m)); if (e) toast(msg + e, 4500); } } catch (e) { Log.warn('economy failed: ' + e); }
+        if (page === 'drives' && !openDrive && !openCmp) render.drives();
+      }, 400);
+    }
     else if (kind === 'connect_failed') popup('Could not connect to the adapter', `<p>${esc(msg || 'Unknown error')}</p><p class="dim small">Check that the adapter is plugged in, the ignition is on, it's paired in your phone's Bluetooth settings, and no other app (like Car Scanner) is connected to it.</p>`);
     else if (kind === 'truck_silent') popup('Adapter connected, but the truck didn\'t answer', `<p>The adapter said: <code>${esc(msg || 'nothing')}</code></p><p class="dim small">Turn the ignition to ON (or start the engine), check the adapter is pushed fully into the port, then connect again. If it still fails, try Protocol: Auto in Settings.</p>`);
   };

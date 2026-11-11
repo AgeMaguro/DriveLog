@@ -1,5 +1,8 @@
 # DriveLog changelog
 
+## 1.0.11 (2026-11-11)
+- **Trip-average economy in the drive log:** every drive with MAF data now shows its estimated average mpg (or L/100 km) on its line in the Drives list, and the "saved drive" message at the end of a trip includes it (for example "saved drive, 24m 10s, 11200 rows · est. 21.4 mpg"). It is worked out from the drive's rows the first time and remembered; it updates if you change units or the trim setting.
+
 ## 1.0.10 (2026-11-11)
 - **Fuel economy averaging window:** the Live fuel economy tile can average over 10 seconds (default), 30 seconds, 1 minute or 5 minutes. Tap the tile to cycle through them, or choose in Settings > Fuel economy > "Live average over". A longer window shows your real driving instead of every throttle blip; right after connecting it shows how much of the window it has so far (for example "0:42 of 5 min").
 
