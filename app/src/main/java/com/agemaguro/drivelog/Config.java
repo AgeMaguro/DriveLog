@@ -97,7 +97,7 @@ final class Config {
     String mode(String pid) {
         String m = pidMode.get(pid);
         if (m != null && !m.isEmpty()) return m;
-        return Pids.isFastDefault(pid) ? "fast" : "normal";
+        return Pids.defaultMode(pid);
     }
 
     boolean demo() { return "demo".equals(device); }

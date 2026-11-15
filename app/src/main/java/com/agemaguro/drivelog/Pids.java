@@ -29,7 +29,9 @@ final class Pids {
 
     static final List<Pid> ORDER = new ArrayList<>();
     static final Map<String, Pid> MAP = new HashMap<>();
-    private static final Set<String> FAST = new HashSet<>(Arrays.asList("0C", "0D", "11", "04", "49", "4C"));
+    private static final Set<String> FAST = new HashSet<>(Arrays.asList("0C", "0D", "11", "04", "49", "4C", "0B", "10"));
+    /** Read more often than "normal" ones: one of these every cycle, taking turns (timing, short-term trim, upstream O2). */
+    private static final Set<String> OFTEN = new HashSet<>(Arrays.asList("0E", "06", "08", "14"));
 
     private static void add(String key, String name, String label, String unit, String kind, int d, int bytes, F f) {
         Pid p = new Pid(key, name, label, unit, kind, d, bytes, false, f);
@@ -77,6 +79,9 @@ final class Pids {
     }
 
     static boolean isFastDefault(String pid) { return FAST.contains(pid); }
+
+    /** "fast", "often" or "normal": the polling tier a sensor gets when the user hasn't picked one. */
+    static String defaultMode(String pid) { return FAST.contains(pid) ? "fast" : OFTEN.contains(pid) ? "often" : "normal"; }
 
     static Pid get(String key) { return MAP.get(key); }
 

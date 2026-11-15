@@ -85,7 +85,7 @@ final class Engine {
     private volatile boolean cruise = false;
     private long lastJumpT = 0, lastThrT = 0;
     private PendingJump pj = null;
-    private int slowIdx = 0;
+    private int slowIdx = 0, oftenIdx = 0;
 
     // --- auto-record
     private volatile boolean suppressed = false;
@@ -483,15 +483,16 @@ final class Engine {
 
     // ================================================================= polling
 
-    private List<Pids.Pid> plan(boolean fast) {
+    /** The supported sensors in one polling tier ("fast", "often" or "normal"), or all that aren't off (null), in sensor-table order. */
+    private List<Pids.Pid> plan(String tier) {
         Config c = cfg;
         Set<String> sup = supported;
         List<Pids.Pid> out = new ArrayList<>();
         for (Pids.Pid p : Pids.ORDER) {
             if (!sup.contains(p.key)) continue;
             String mode = c.mode(p.key);
-            if (mode.equals("off")) continue;
-            if (mode.equals("fast") == fast) out.add(p);
+            if (!mode.equals("fast") && !mode.equals("often") && !mode.equals("off")) mode = "normal";
+            if (tier == null ? !mode.equals("off") : mode.equals(tier)) out.add(p);
         }
         return out;
     }
@@ -521,8 +522,10 @@ final class Engine {
 
     private void pollOnce() {
         long t0 = System.currentTimeMillis();
-        List<Pids.Pid> fast = plan(true), slow = plan(false);
+        // Each cycle: every fast sensor, then one "often" sensor and one "normal" sensor (each tier takes turns).
+        List<Pids.Pid> fast = plan("fast"), often = plan("often"), slow = plan("normal");
         List<Pids.Pid> list = new ArrayList<>(fast);
+        if (!often.isEmpty()) list.add(often.get(oftenIdx++ % often.size()));
         if (!slow.isEmpty()) list.add(slow.get(slowIdx++ % slow.size()));
         if (list.isEmpty()) { waitCmd(500); return; }
         for (Pids.Pid p : list) {
@@ -734,8 +737,7 @@ final class Engine {
         if (!conn.equals("on")) { if (!auto) host.onNotice("toast", "Connect first"); return; }
         if (recOn) return;
         Config c = effective();
-        List<Pids.Pid> cols = new ArrayList<>(plan(true));
-        cols.addAll(plan(false));
+        List<Pids.Pid> cols = plan(null);   // sensor-table order, so the CSV layout doesn't change with polling tiers
         String id = "d" + System.currentTimeMillis();
         Map<String, Object> m = new LinkedHashMap<>();
         long now = System.currentTimeMillis();

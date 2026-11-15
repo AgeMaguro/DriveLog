@@ -241,7 +241,7 @@ input.full { width:100%; }
 
     <div class="card">
       <h3>Sensors to log</h3>
-      <div class="small dim" style="margin-bottom:6px"><b>Fast</b> sensors are read every cycle; <b>Normal</b> ones take turns (each about every few seconds). Fewer fast sensors = more readings per second. Greyed out = the truck doesn't report it (shown after connecting).</div>
+      <div class="small dim" style="margin-bottom:6px"><b>Fast</b> sensors are read every cycle (several times a second). <b>Often</b> ones take turns, one per cycle (each about once a second). <b>Normal</b> ones also take turns, one per cycle (each every few seconds). Fewer fast sensors = more readings per second. Greyed out = the truck doesn't report it (shown after connecting).</div>
       <div id="pidList"></div>
     </div>
 
@@ -556,7 +556,8 @@ function showPidInfo(key) {
   document.addEventListener('contextmenu', e => { if (e.target.closest && e.target.closest(SEL)) e.preventDefault(); });
 })();
 const PID_ORDER = Object.keys(PIDS);
-const FAST_DEFAULT = ['0C', '0D', '11', '04', '49', '4C'];
+const FAST_DEFAULT = ['0C', '0D', '11', '04', '49', '4C', '0B', '10'];
+const OFTEN_DEFAULT = ['0E', '06', '08', '14'];   // one of these is read every cycle, taking turns
 const UNITS = {
   us: { temp: ['°F', c => c * 9 / 5 + 32], speed: ['mph', k => k * 0.621371], press: ['psi', k => k * 0.145038], dist: ['mi', k => k * 0.621371] },
   metric: { temp: ['°C', c => c], speed: ['km/h', k => k], press: ['kPa', k => k], dist: ['km', k => k] }
@@ -565,7 +566,7 @@ function unitOf(pid) { const p = PIDS[pid]; return p.k ? UNITS[S.units][p.k][0] 
 function toDisp(pid, v) { const p = PIDS[pid]; return (v == null || !p.k) ? v : UNITS[S.units][p.k][1](v); }
 function pidMode(pid) {
   if (S.pidMode[pid]) return S.pidMode[pid];
-  return FAST_DEFAULT.includes(pid) ? 'fast' : 'normal';
+  return FAST_DEFAULT.includes(pid) ? 'fast' : OFTEN_DEFAULT.includes(pid) ? 'often' : 'normal';
 }
 
 /* =====================================================================
@@ -785,7 +786,7 @@ const Conn = {
   lost(msg) { if (this.state !== 'off') { Log.warn('Connection lost: ' + msg); this.stop('Connection lost'); toast(msg); } },
   plan() {
     const use = PID_ORDER.filter(p => this.supported.has(p) && pidMode(p) !== 'off');
-    return { fast: use.filter(p => pidMode(p) === 'fast'), slow: use.filter(p => pidMode(p) === 'normal') };
+    return { all: use, fast: use.filter(p => pidMode(p) === 'fast'), often: use.filter(p => pidMode(p) === 'often'), slow: use.filter(p => !['fast', 'often'].includes(pidMode(p))) };
   },
   async readPid(pid) {
     if (pid === 'RV') {
@@ -805,11 +806,12 @@ const Conn = {
   async poll() {
     if (this.polling) return;
     this.polling = true;
-    let slowIdx = 0;
+    let slowIdx = 0, oftenIdx = 0;
     while (this.state === 'on' && this.polling) {
       const t0 = performance.now();
-      const { fast, slow } = this.plan();
+      const { fast, often, slow } = this.plan();
       const list = fast.slice();
+      if (often.length) list.push(often[oftenIdx++ % often.length]);
       if (slow.length) list.push(slow[slowIdx++ % slow.length]);
       if (!list.length) { await sleep(500); continue; }
       for (const pid of list) {
@@ -945,8 +947,7 @@ const Rec = {
   start(opts) {
     opts = opts || {};
     if (Conn.state !== 'on') { if (!opts.auto) toast('Connect first'); return; }
-    const { fast, slow } = Conn.plan();
-    const cols = [...fast, ...slow];
+    const cols = Conn.plan().all;   // sensor-table order, so the CSV layout doesn't change with polling tiers
     const id = 'd' + Date.now();
     this.meta = { id, start: Date.now(), end: Date.now(), rows: 0, cols: cols.map(p => ({ k: p, label: PIDS[p].s, unit: unitOf(p) })), units: S.units,
       events: [], demo: Elm.transport === DemoTruck, proto: Conn.protoName, k: kFactor(), gears: S.gears.slice(), app: VERSION, auto: !!opts.auto,
@@ -1495,8 +1496,7 @@ const render = {
     if (!on) $('tiles').innerHTML = '';
   },
   tiles() {
-    const { fast, slow } = Conn.plan();
-    const pids = [...fast, ...slow];
+    const pids = Conn.plan().all;
     let html = `<div class="tile wide" id="tile-GEAR" data-info="GEAR"><div class="lab">Gear (calculated)</div><div class="val" id="v-GEAR">–</div><div class="mm" id="mm-GEAR">RPM ÷ speed</div></div>`;
     if (pids.includes('10')) html += `<div class="tile wide" id="tile-MPG" data-info="MPG"><div class="lab">Fuel economy (estimated)</div><div class="val"><span id="v-MPG">–</span><small id="u-MPG"></small></div><div class="mm" id="mm-MPG">from air flow</div></div>`;
     for (const p of pids) {
@@ -1786,7 +1786,7 @@ const render = {
     $('pidList').innerHTML = PID_ORDER.map(p => {
       const sup = !known || Conn.supported.has(p);
       const m = pidMode(p);
-      return `<div class="pidrow${sup ? '' : ' uns'}"><span data-info="${p}">${esc(PIDS[p].n)} <span class="dim small">${esc(unitOf(p))}</span></span><select data-p="${p}"><option value="fast"${m === 'fast' ? ' selected' : ''}>Fast</option><option value="normal"${m === 'normal' ? ' selected' : ''}>Normal</option><option value="off"${m === 'off' ? ' selected' : ''}>Off</option></select></div>`;
+      return `<div class="pidrow${sup ? '' : ' uns'}"><span data-info="${p}">${esc(PIDS[p].n)} <span class="dim small">${esc(unitOf(p))}</span></span><select data-p="${p}"><option value="fast"${m === 'fast' ? ' selected' : ''}>Fast</option><option value="often"${m === 'often' ? ' selected' : ''}>Often</option><option value="normal"${m === 'normal' ? ' selected' : ''}>Normal</option><option value="off"${m === 'off' ? ' selected' : ''}>Off</option></select></div>`;
     }).join('');
     $('pidList').querySelectorAll('select').forEach(sel => sel.onchange = () => {
       S.pidMode[sel.dataset.p] = sel.value; saveSettings();

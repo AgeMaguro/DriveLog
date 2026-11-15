@@ -1,5 +1,14 @@
 # DriveLog changelog
 
+## 1.0.12 (2026-11-14)
+- **Faster air-flow readings, new "Often" sensor speed:** from a real 6-minute drive, MAF, MAP, timing, fuel trims and O2 were each read only about every 3 s, too slow to see quick changes. Now:
+  - **Fast** (every cycle, about every 0.4 s): RPM, speed, throttle, load, and now **MAF** and **MAP**.
+  - **Often** (new; take turns, one per cycle, each about every 1.3 s): **timing**, **short-term fuel trim** and **upstream O2**.
+  - **Normal** (take turns, each about every 2.6 s, was about 3 s): coolant, intake air, long-term trim, downstream O2, battery and the rest.
+  - RPM and speed update a little less often (about 0.4 s instead of 0.27 s) because each cycle reads more sensors.
+  - Settings > Sensors has the new "Often" choice. Sensors you set by hand keep your choice.
+  - CSV columns and Live tiles stay in the same order as before.
+
 ## 1.0.11 (2026-11-11)
 - **Trip-average economy in the drive log:** every drive with MAF data now shows its estimated average mpg (or L/100 km) on its line in the Drives list, and the "saved drive" message at the end of a trip includes it (for example "saved drive, 24m 10s, 11200 rows · est. 21.4 mpg"). It is worked out from the drive's rows the first time and remembered; it updates if you change units or the trim setting.
 
